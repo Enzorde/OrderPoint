@@ -1,3 +1,6 @@
 SCRUM-29 adiciona diagrama de classe
 SCRUM-29 teste integração
 SCRUM-29 teste final de integração
+git add .
+git commit -m "SCRUM-29 descrição do que foi feito"
+git push
