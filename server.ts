@@ -202,5 +202,7 @@ class AppServer {
       new UserController(this.dbManager.db, this.app),
     ];
 
-
+// Start the server
+const server = new AppServer();
+server.start(3000);
 
