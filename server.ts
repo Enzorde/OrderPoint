@@ -30,6 +30,32 @@ class DatabaseManager {
   }
 }
 
+// Canteens
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS canteens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        desc TEXT NOT NULL,
+        location TEXT NOT NULL DEFAULT '',
+        emoji TEXT NOT NULL,
+        color TEXT NOT NULL,
+        open_time TEXT NOT NULL DEFAULT '08:00',
+        close_time TEXT NOT NULL DEFAULT '18:00'
+      )
+    `);
+    try { this.db.exec("ALTER TABLE canteens ADD COLUMN location TEXT NOT NULL DEFAULT ''"); } catch (e) {}
+
+
+  private seedData() {
+    // Seed Canteens
+    const canteensCount = this.db.prepare('SELECT COUNT(*) as count FROM canteens').get() as any;
+    if (canteensCount.count === 0) {
+      const insertCanteen = this.db.prepare('INSERT INTO canteens (name, desc, location, emoji, color, open_time, close_time) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      insertCanteen.run('Cantina Central', 'Salgados, lanches e bebidas para o dia a dia', 'Prédio Principal', '🍕', '#fff8f0', '08:00', '18:00');
+      insertCanteen.run('Cantina do Bloco B', 'Refeições completas e opções saudáveis', 'Bloco B', '🥗', '#f0f7ff', '08:00', '17:00');
+      insertCanteen.run('Cafeteria Leste', 'Cafés, sucos e snacks rápidos', 'Prédio Leste', '☕', '#f5f7fb', '08:00', '18:00');
+    }
+
 class AppServer {
   private app: express.Application;
   private dbManager: DatabaseManager;
@@ -78,6 +104,10 @@ class AppServer {
   }
 }
 
+
+// ============================================================================
+// Controllers
+// ============================================================================
 class BaseController {
   protected db: DatabaseSync;
   protected app: express.Application;
@@ -153,6 +183,32 @@ class UserController extends BaseController {
     }
   }
 
+
+class CanteenController extends BaseController {
+  constructor(db: DatabaseSync, app: express.Application) {
+    super(db, app);
+  }
+
+  public registerRoutes() {
+    this.app.get("/api/canteens", this.getAll.bind(this));
+    this.app.put("/api/canteens/:id", this.update.bind(this));
+  }
+
+  private getAll(req: Request, res: Response) {
+    try {
+      const canteens = this.db.prepare(`
+        SELECT c.*, 
+               COALESCE(AVG(r.score), 0) as avg_rating,
+               COUNT(r.id) as rating_count
+        FROM canteens c
+        LEFT JOIN ratings r ON c.id = r.canteen_id
+        GROUP BY c.id
+      `).all();
+      res.json(canteens);
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao buscar cantinas." });
+    }
+  }
 
 // ============================================================================
 // Controllers
