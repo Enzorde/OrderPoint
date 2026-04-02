@@ -10,6 +10,19 @@ type User = {
   role: 'student' | 'manager';
 };
 
+type Canteen = {
+  id: number;
+  name: string;
+  desc: string;
+  location: string;
+  emoji: string;
+  color: string;
+  open_time: string;
+  close_time: string;
+  avg_rating: number;
+  rating_count: number;
+};
+
 function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: (s: Screen) => void, currentUser: User | null, setCurrentUser: (u: User) => void, showToast: (msg: string) => void }) {
   const [name, setName] = useState(currentUser?.name || '');
   const [email, setEmail] = useState(currentUser?.email || '');
@@ -94,6 +107,32 @@ function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: 
     </div>
   );
 }
+
+useEffect(() => {
+    fetchProducts();
+    fetchCanteens();
+    fetchCategories();
+  }, []);
+
+  const fetchCanteens = async () => {
+    try {
+      const res = await fetch('/api/canteens');
+      const data = await res.json();
+      setCanteens(data);
+    } catch (err) {
+      console.error("Erro ao carregar cantinas", err);
+    }
+  };
+
+  const goTo = (screen: Screen) => {
+    setCurrentScreen(screen);
+    window.scrollTo(0, 0);
+  };
+
+  const showToast = (msg: string) => {
+    setToastMsg(msg);
+    setTimeout(() => setToastMsg(null), 2000);
+  };
 
 <AnimatePresence mode="wait">
         <motion.div
