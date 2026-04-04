@@ -1,0 +1,5 @@
+{
+  "name": "OrderPoint",
+  "description": "Sistema de retirada de pedidos da cantina universitária",
+  "requestFramePermissions": []
+}
