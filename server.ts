@@ -27,10 +27,23 @@ class DatabaseManager {
         role TEXT NOT NULL DEFAULT 'student'
       )
     `);
-  }
-}
 
-// Canteens
+    // Products
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        desc TEXT NOT NULL,
+        price REAL NOT NULL,
+        emoji TEXT NOT NULL,
+        cat TEXT NOT NULL,
+        active INTEGER DEFAULT 1,
+        stock INTEGER DEFAULT 10
+      )
+    `);
+    try { this.db.exec("ALTER TABLE products ADD COLUMN stock INTEGER DEFAULT 10"); } catch (e) {}
+
+    // Canteens
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS canteens (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -45,6 +58,15 @@ class DatabaseManager {
     `);
     try { this.db.exec("ALTER TABLE canteens ADD COLUMN location TEXT NOT NULL DEFAULT ''"); } catch (e) {}
 
+    // Categories
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL
+      )
+    `);
+  }
+
 
   private seedData() {
     // Seed Canteens
@@ -56,53 +78,17 @@ class DatabaseManager {
       insertCanteen.run('Cafeteria Leste', 'Cafés, sucos e snacks rápidos', 'Prédio Leste', '☕', '#f5f7fb', '08:00', '18:00');
     }
 
-class AppServer {
-  private app: express.Application;
-  private dbManager: DatabaseManager;
-
-  constructor() {
-    this.app = express();
-    this.app.use(express.json());
-    this.dbManager = new DatabaseManager();
-    this.setupControllers();
-  }
-
-  private setupControllers() {
-    const controllers: BaseController[] = [
-      new UserController(this.dbManager.db, this.app),
-      new ProductController(this.dbManager.db, this.app),
-      new CanteenController(this.dbManager.db, this.app),
-      new CategoryController(this.dbManager.db, this.app),
-      new RatingController(this.dbManager.db, this.app),
-      new OrderController(this.dbManager.db, this.app)
-    ];
-
-    for (const controller of controllers) {
-      controller.registerRoutes();
+   // Seed Categories
+    const catCount = this.db.prepare('SELECT COUNT(*) as count FROM categories').get() as any;
+    if (catCount.count === 0) {
+      const insertCat = this.db.prepare('INSERT INTO categories (name) VALUES (?)');
+      insertCat.run('salgados');
+      insertCat.run('bebidas');
+      insertCat.run('lanches');
     }
-  }
-
-  public async start(port: number) {
-    // Vite middleware for development
-    if (process.env.NODE_ENV !== "production") {
-      const vite = await createViteServer({
-        server: { middlewareMode: true },
-        appType: "spa",
-      });
-      this.app.use(vite.middlewares);
-    } else {
-      const distPath = path.join(process.cwd(), 'dist');
-      this.app.use(express.static(distPath));
-      this.app.get('*', (req, res) => {
-        res.sendFile(path.join(distPath, 'index.html'));
-      });
-    }
-
-    this.app.listen(port, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${port}`);
-    });
   }
 }
+
 
 
 // ============================================================================
@@ -183,6 +169,28 @@ class UserController extends BaseController {
     }
   }
 
+  private updateProfile(req: Request, res: Response) {
+    const { name, email, senha } = req.body;
+    const matricula = email.endsWith('@facens.br') ? email.replace('@facens.br', '') : '';
+    
+    try {
+      if (senha) {
+        const update = this.db.prepare('UPDATE users SET name=?, email=?, matricula=?, senha=? WHERE id=?');
+        update.run(name, email, matricula, senha, req.params.id);
+      } else {
+        const update = this.db.prepare('UPDATE users SET name=?, email=?, matricula=? WHERE id=?');
+        update.run(name, email, matricula, req.params.id);
+      }
+      res.json({ success: true, matricula });
+    } catch (error: any) {
+      if (error.message && error.message.includes("UNIQUE constraint failed")) {
+        res.status(400).json({ error: "E-mail já cadastrado." });
+      } else {
+        res.status(500).json({ error: "Erro ao atualizar perfil." });
+      }
+    }
+  }
+}
 
 class CanteenController extends BaseController {
   constructor(db: DatabaseSync, app: express.Application) {
@@ -210,32 +218,68 @@ class CanteenController extends BaseController {
     }
   }
 
-// ============================================================================
-// Controllers
-// ============================================================================
-
-  private updateProfile(req: Request, res: Response) {
-    const { name, email, senha } = req.body;
-    const matricula = email.endsWith('@facens.br') ? email.replace('@facens.br', '') : '';
-    
+  private update(req: Request, res: Response) {
+    const { name, desc, location, emoji, color, open_time, close_time } = req.body;
     try {
-      if (senha) {
-        const update = this.db.prepare('UPDATE users SET name=?, email=?, matricula=?, senha=? WHERE id=?');
-        update.run(name, email, matricula, senha, req.params.id);
-      } else {
-        const update = this.db.prepare('UPDATE users SET name=?, email=?, matricula=? WHERE id=?');
-        update.run(name, email, matricula, req.params.id);
-      }
-      res.json({ success: true, matricula });
-    } catch (error: any) {
-      if (error.message && error.message.includes("UNIQUE constraint failed")) {
-        res.status(400).json({ error: "E-mail já cadastrado." });
-      } else {
-        res.status(500).json({ error: "Erro ao atualizar perfil." });
-      }
+      const update = this.db.prepare('UPDATE canteens SET name=?, desc=?, location=?, emoji=?, color=?, open_time=?, close_time=? WHERE id=?');
+      update.run(name, desc, location, emoji, color, open_time, close_time, req.params.id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao atualizar cantina." });
     }
   }
 }
+
+class CategoryController extends BaseController {
+  constructor(db: DatabaseSync, app: express.Application) {
+    super(db, app);
+  }
+
+  public registerRoutes() {
+    this.app.get("/api/categories", this.getAll.bind(this));
+    this.app.post("/api/categories", this.create.bind(this));
+    this.app.delete("/api/categories/:id", this.delete.bind(this));
+  }
+
+  private getAll(req: Request, res: Response) {
+    try {
+      const categories = this.db.prepare('SELECT * FROM categories').all();
+      res.json(categories);
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao buscar categorias." });
+    }
+  }
+
+  private create(req: Request, res: Response) {
+    const { name } = req.body;
+    if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
+    try {
+      const insert = this.db.prepare('INSERT INTO categories (name) VALUES (?)');
+      const result = insert.run(name);
+      res.status(201).json({ success: true, id: result.lastInsertRowid });
+    } catch (error: any) {
+      if (error.message && error.message.includes("UNIQUE constraint failed")) {
+        res.status(400).json({ error: "Categoria já existe." });
+      } else {
+        res.status(500).json({ error: "Erro ao criar categoria." });
+      }
+    }
+  }
+
+  private delete(req: Request, res: Response) {
+    try {
+      const del = this.db.prepare('DELETE FROM categories WHERE id=?');
+      del.run(parseInt(req.params.id, 10));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao deletar categoria." });
+    }
+  }
+}
+
+
+
+
 
 
 // ============================================================================
@@ -256,7 +300,37 @@ class AppServer {
   private setupControllers() {
     const controllers: BaseController[] = [
       new UserController(this.dbManager.db, this.app),
+      new CanteenController(this.dbManager.db, this.app),
+      new CategoryController(this.dbManager.db, this.app),
+      new OrderController(this.dbManager.db, this.app)
     ];
+
+    for (const controller of controllers) {
+      controller.registerRoutes();
+    }
+  }
+
+  public async start(port: number) {
+
+    if (process.env.NODE_ENV !== "production") {
+      const vite = await createViteServer({
+        server: { middlewareMode: true },
+        appType: "spa",
+      });
+      this.app.use(vite.middlewares);
+    } else {
+      const distPath = path.join(process.cwd(), 'dist');
+      this.app.use(express.static(distPath));
+      this.app.get('*', (req, res) => {
+        res.sendFile(path.join(distPath, 'index.html'));
+      });
+    }
+
+    this.app.listen(port, "0.0.0.0", () => {
+      console.log(`Server running on http://localhost:${port}`);
+    });
+  }
+}
 
 // Start the server
 const server = new AppServer();
