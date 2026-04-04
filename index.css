@@ -262,6 +262,20 @@ input:focus, select:focus {
 .status-open   { background: var(--success); }
 .status-closed { background: var(--danger); }
 
+.catalog-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 24px;
+  flex-wrap: wrap;
+  gap: 12px;
+}
+.category-tabs {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 24px;
+}
 .gestor-tabs {
   display: flex;
   gap: 10px;
