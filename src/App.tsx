@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import EmojiPicker from 'emoji-picker-react';
 
@@ -8,6 +8,25 @@ type User = {
   email?: string;
   matricula?: string;
   role: 'student' | 'manager';
+};
+
+type Product = {
+  id: number;
+  name: string;
+  desc: string;
+  price: number;
+  emoji: string;
+  cat: string;
+  active: number;
+  stock: number;
+};
+
+type CartItem = {
+  id: number;
+  name: string;
+  price: number;
+  emoji: string;
+  qty: number;
 };
 
 type Canteen = {
@@ -23,22 +42,62 @@ type Canteen = {
   rating_count: number;
 };
 
+type Order = {
+  id: number;
+  code: string;
+  user_name: string;
+  items: string; // JSON string
+  total: number;
+  status: 'aguardando' | 'preparo' | 'pronto' | 'retirado' | 'cancelado';
+  canteen_id: number;
+  rating?: number;
+  created_at: string;
+};
+
 type Category = {
   id: number;
   name: string;
+};
+
+type Screen = 'login' | 'login-gestor' | 'cadastro' | 'cantinas' | 'catalogo' | 'carrinho' | 'confirmacao' | 'status' | 'gestor' | 'meus-pedidos' | 'perfil';
+
+const playNotificationSound = () => {
+  try {
+    const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
+    const osc = ctx.createOscillator();
+    const gainNode = ctx.createGain();
+    
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, ctx.currentTime); // A5
+    osc.frequency.exponentialRampToValueAtTime(1760, ctx.currentTime + 0.1); // A6
+    
+    gainNode.gain.setValueAtTime(0, ctx.currentTime);
+    gainNode.gain.linearRampToValueAtTime(0.3, ctx.currentTime + 0.05);
+    gainNode.gain.exponentialRampToValueAtTime(0.01, ctx.currentTime + 0.3);
+    
+    osc.connect(gainNode);
+    gainNode.connect(ctx.destination);
+    
+    osc.start();
+    osc.stop(ctx.currentTime + 0.3);
+  } catch (e) {
+    console.error("Audio play failed", e);
+  }
 };
 
 function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: (s: Screen) => void, currentUser: User | null, setCurrentUser: (u: User) => void, showToast: (msg: string) => void }) {
   const [name, setName] = useState(currentUser?.name || '');
   const [email, setEmail] = useState(currentUser?.email || '');
   const [senha, setSenha] = useState('');
+  const [confirmaSenha, setConfirmaSenha] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [totalOrders, setTotalOrders] = useState(0);
 
   const matricula = email.endsWith('@facens.br') ? email.replace('@facens.br', '') : (currentUser?.matricula || '');
 
   useEffect(() => {
-    if (currentUser?.name) {
-      fetch(`/api/orders/user/${currentUser.name}`)
+    if (currentUser?.id) {
+      fetch(`/api/orders/user/${currentUser.id}`)
         .then(res => res.json())
         .then(data => {
           if (Array.isArray(data)) {
@@ -51,17 +110,31 @@ function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: 
 
   const handleSave = async () => {
     if (!currentUser?.id) return;
+
+    if (isChangingPassword) {
+      if (senha !== confirmaSenha) {
+        showToast('Erro: As senhas não coincidem.');
+        return;
+      }
+      if (senha.length < 6) {
+        showToast('Erro: A senha deve ter no mínimo 6 caracteres.');
+        return;
+      }
+    }
+
     try {
       const res = await fetch(`/api/users/${currentUser.id}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name, email, senha })
+        body: JSON.stringify({ name, email, senha: isChangingPassword ? senha : '' })
       });
       const data = await res.json();
       if (res.ok && data.success) {
         showToast('✅ Perfil atualizado com sucesso!');
         setCurrentUser({ ...currentUser, name, email, matricula: data.matricula });
-        setSenha(''); // Clear password field after save
+        setSenha(''); 
+        setConfirmaSenha('');
+        setIsChangingPassword(false);
       } else {
         showToast(data.error || 'Erro ao atualizar perfil.');
       }
@@ -103,10 +176,29 @@ function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: 
               <input type="text" value={matricula} readOnly style={{ background: 'var(--bg)', color: 'var(--muted)', cursor: 'not-allowed' }} title="Matrícula gerada automaticamente a partir do e-mail" />
             </label>
           )}
-          <label>Nova Senha (deixe em branco para não alterar)
-            <input type="password" placeholder="••••••••" value={senha} onChange={e => setSenha(e.target.value)} />
-          </label>
-          <button className="btn-orange" style={{ marginTop: 12 }} onClick={handleSave}>Salvar Alterações</button>
+
+          {!isChangingPassword ? (
+            <button className="btn-outline" style={{ marginTop: 8 }} onClick={() => setIsChangingPassword(true)}>
+              Alterar Senha
+            </button>
+          ) : (
+            <div style={{ background: 'var(--bg)', padding: 16, borderRadius: 8, marginTop: 8, border: '1px solid var(--border)' }}>
+              <h4 style={{ margin: '0 0 12px 0' }}>Alterar Senha</h4>
+              <label>Nova Senha
+                <input type="password" placeholder="Mínimo 6 caracteres" value={senha} onChange={e => setSenha(e.target.value)} />
+              </label>
+              <label>Confirmar Nova Senha
+                <input type="password" placeholder="Repita a nova senha" value={confirmaSenha} onChange={e => setConfirmaSenha(e.target.value)} />
+              </label>
+              <button className="btn-secondary btn-sm" onClick={() => {
+                setIsChangingPassword(false);
+                setSenha('');
+                setConfirmaSenha('');
+              }}>Cancelar alteração de senha</button>
+            </div>
+          )}
+
+          <button className="btn-orange" style={{ marginTop: 16 }} onClick={handleSave}>Salvar Alterações</button>
         </div>
       </div>
     </div>
@@ -114,13 +206,62 @@ function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: 
 }
 
 export default function App() {
-  const [currentScreen, setCurrentScreen] = useState<Screen>('login');
-  const [currentUser, setCurrentUser] = useState<User | null>(null);
+  const [currentScreen, setCurrentScreen] = useState<Screen>(() => {
+    const saved = localStorage.getItem('currentUser');
+    return saved ? 'cantinas' : 'login';
+  });
+  const [currentUser, setCurrentUser] = useState<User | null>(() => {
+    const saved = localStorage.getItem('currentUser');
+    return saved ? JSON.parse(saved) : null;
+  });
+  const [cart, setCart] = useState<CartItem[]>(() => {
+    const savedUser = localStorage.getItem('currentUser');
+    const user = savedUser ? JSON.parse(savedUser) : null;
+    if (user) {
+      const savedCart = localStorage.getItem(`cart_${user.id}`);
+      return savedCart ? JSON.parse(savedCart) : [];
+    }
+    return [];
+  });
+  const [orderCode, setOrderCode] = useState<string>('');
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [products, setProducts] = useState<Product[]>([]);
   const [canteens, setCanteens] = useState<Canteen[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [selectedCanteen, setSelectedCanteen] = useState<Canteen | null>(null);
 
+  useEffect(() => {
+    if (currentUser) {
+      localStorage.setItem('currentUser', JSON.stringify(currentUser));
+    } else {
+      localStorage.removeItem('currentUser');
+    }
+  }, [currentUser]);
+
+  useEffect(() => {
+    if (currentUser) {
+      const savedCart = localStorage.getItem(`cart_${currentUser.id}`);
+      setCart(savedCart ? JSON.parse(savedCart) : []);
+    } else {
+      setCart([]);
+    }
+  }, [currentUser?.id]);
+
+  useEffect(() => {
+    if (currentUser) {
+      localStorage.setItem(`cart_${currentUser.id}`, JSON.stringify(cart));
+    }
+  }, [cart, currentUser]);
+
+  const fetchProducts = async () => {
+    try {
+      const res = await fetch('/api/products');
+      const data = await res.json();
+      setProducts(data);
+    } catch (err) {
+      console.error("Erro ao carregar produtos", err);
+    }
+  };
 
   const fetchCategories = async () => {
     try {
@@ -136,6 +277,13 @@ export default function App() {
     fetchProducts();
     fetchCanteens();
     fetchCategories();
+    
+    // Polling para manter o catálogo e estoque atualizados em tempo real
+    const interval = setInterval(() => {
+      fetchProducts();
+    }, 5000);
+    
+    return () => clearInterval(interval);
   }, []);
 
   const fetchCanteens = async () => {
@@ -157,7 +305,83 @@ export default function App() {
     setToastMsg(msg);
     setTimeout(() => setToastMsg(null), 2000);
   };
-};
+
+  const addToCart = (product: Product) => {
+    const existing = cart.find(i => i.id === product.id);
+    if (existing && existing.qty + 1 > product.stock) {
+      showToast(`⚠️ Limite de estoque atingido!`);
+      return;
+    }
+    if (!existing && product.stock < 1) {
+      showToast('⚠️ Produto esgotado!');
+      return;
+    }
+
+    setCart(prev => {
+      const ex = prev.find(i => i.id === product.id);
+      if (ex) {
+        return prev.map(i => i.id === product.id ? { ...i, qty: i.qty + 1 } : i);
+      }
+      return [...prev, { id: product.id, name: product.name, price: product.price, emoji: product.emoji, qty: 1 }];
+    });
+    showToast(`✅ ${product.name} adicionado!`);
+  };
+
+  const changeQty = (index: number, delta: number) => {
+    const item = cart[index];
+    const product = products.find(p => p.id === item.id);
+    
+    if (delta > 0 && product && item.qty + delta > product.stock) {
+      showToast(`⚠️ Limite de estoque atingido!`);
+      return;
+    }
+
+    setCart(prev => {
+      const newCart = [...prev];
+      newCart[index] = { ...newCart[index], qty: newCart[index].qty + delta };
+      if (newCart[index].qty <= 0) {
+        newCart.splice(index, 1);
+      }
+      return newCart;
+    });
+  };
+
+  const clearCart = () => setCart([]);
+
+  const finalizarPedido = async () => {
+    if (cart.length === 0) {
+      showToast('Adicione pelo menos um item ao carrinho!');
+      return;
+    }
+    
+    const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+    
+    try {
+      const res = await fetch('/api/orders', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          user_name: currentUser?.name || 'Aluno',
+          user_id: currentUser?.id,
+          items: cart,
+          total: total,
+          canteen_id: selectedCanteen?.id || 1
+        })
+      });
+      
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setOrderCode(data.code);
+        setCart([]);
+        goTo('confirmacao');
+        fetchProducts();
+      } else {
+        showToast(data.error || 'Erro ao finalizar pedido.');
+      }
+    } catch (err) {
+      showToast('Erro de conexão com o servidor.');
+    }
+  };
 
   const logout = () => {
     setCart([]);
@@ -165,8 +389,10 @@ export default function App() {
     goTo('login');
   };
 
-const authScreens = ['login', 'cadastro', 'login-gestor'];
+  const authScreens = ['login', 'cadastro', 'login-gestor'];
   const showNavbar = !authScreens.includes(currentScreen);
+
+  const cartCount = cart.reduce((sum, item) => sum + item.qty, 0);
 
   return (
     <>
@@ -197,7 +423,7 @@ const authScreens = ['login', 'cadastro', 'login-gestor'];
         </nav>
       )}
 
-<AnimatePresence mode="wait">
+      <AnimatePresence mode="wait">
         <motion.div
           key={currentScreen}
           initial={{ opacity: 0, y: 10 }}
@@ -210,12 +436,16 @@ const authScreens = ['login', 'cadastro', 'login-gestor'];
           {currentScreen === 'cadastro' && <ScreenCadastro goTo={goTo} />}
           {currentScreen === 'cantinas' && <ScreenCantinas goTo={goTo} canteens={canteens} setSelectedCanteen={setSelectedCanteen} />}
           {currentScreen === 'catalogo' && <ScreenCatalogo goTo={goTo} addToCart={addToCart} products={products} selectedCanteen={selectedCanteen} categories={categories} />}
+          {currentScreen === 'carrinho' && <ScreenCarrinho goTo={goTo} cart={cart} changeQty={changeQty} clearCart={clearCart} finalizarPedido={finalizarPedido} />}
+          {currentScreen === 'confirmacao' && <ScreenConfirmacao goTo={goTo} orderCode={orderCode} />}
+          {currentScreen === 'status' && <ScreenStatus goTo={goTo} orderCode={orderCode} />}
+          {currentScreen === 'meus-pedidos' && <ScreenMeusPedidos goTo={goTo} currentUser={currentUser} setOrderCode={setOrderCode} showToast={showToast} fetchCanteens={fetchCanteens} />}
           {currentScreen === 'gestor' && <ScreenGestor products={products} fetchProducts={fetchProducts} showToast={showToast} canteens={canteens} fetchCanteens={fetchCanteens} categories={categories} fetchCategories={fetchCategories} />}
           {currentScreen === 'perfil' && <ScreenPerfil goTo={goTo} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} />}
         </motion.div>
       </AnimatePresence>
 
-     <AnimatePresence>
+      <AnimatePresence>
         {toastMsg && (
           <motion.div
             initial={{ opacity: 0, y: 20 }}
@@ -287,7 +517,7 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
         <p className="auth-subtitle">Sistema de retirada de pedidos da cantina universitária</p>
         <div className="form">
           <label>E-mail institucional
-            <input type="email" placeholder="seu@faculdade.edu.br" value={email} onChange={e => setEmail(e.target.value)} />
+            <input type="email" placeholder="123456@facens.br" value={email} onChange={e => setEmail(e.target.value)} />
           </label>
           <label>Senha
             <input type="password" placeholder="••••••••" value={senha} onChange={e => setSenha(e.target.value)} />
@@ -306,7 +536,7 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
 
 function ScreenLoginGestor({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setCurrentUser: (u: User) => void }) {
   const doLoginGestor = () => {
-    setCurrentUser({ id: 999, name: 'Carlos (Gestor)', email: 'carlos@faculdade.edu.br', role: 'manager' });
+    setCurrentUser({ id: 999, name: 'Carlos (Gestor)', email: 'carlos@facens.br', role: 'manager' });
     goTo('gestor');
   };
 
@@ -318,7 +548,7 @@ function ScreenLoginGestor({ goTo, setCurrentUser }: { goTo: (s: Screen) => void
         <p className="auth-subtitle" style={{ marginTop: 8 }}>Acesse o painel de gerenciamento</p>
         <div className="form">
           <label>E-mail
-            <input type="email" placeholder="gestor@faculdade.edu.br" defaultValue="carlos@faculdade.edu.br" />
+            <input type="email" placeholder="gestor@facens.br" defaultValue="carlos@facens.br" />
           </label>
           <label>Senha
             <input type="password" placeholder="••••••••" defaultValue="123456" />
@@ -353,8 +583,9 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
       setError('A senha deve ter no mínimo 6 caracteres.');
       return;
     }
-    if (!email.endsWith('@facens.br')) {
-      setError('O e-mail deve ser institucional (@facens.br).');
+    const emailRegex = /^\d{6}@facens\.br$/;
+    if (!emailRegex.test(email)) {
+      setError('O e-mail deve ser institucional (@facens.br) e conter exatamente 6 dígitos numéricos antes do @ (seu RA).');
       return;
     }
 
@@ -393,7 +624,7 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
             <input type="text" placeholder="Seu nome" value={nome} onChange={e => setNome(e.target.value)} />
           </label>
           <label>E-mail institucional
-            <input type="email" placeholder="seu@faculdade.edu.br" value={email} onChange={e => setEmail(e.target.value)} />
+            <input type="email" placeholder="123456@facens.br" value={email} onChange={e => setEmail(e.target.value)} />
           </label>
           <label>Senha
             <input type="password" placeholder="Mínimo 6 caracteres" value={senha} onChange={e => setSenha(e.target.value)} />
@@ -489,9 +720,17 @@ function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Scre
 
 function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories }: { goTo: (s: Screen) => void, addToCart: (p: Product) => void, products: Product[], selectedCanteen: Canteen | null, categories: Category[] }) {
   const [activeCat, setActiveCat] = useState('todos');
+  const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
+  const [addedProductId, setAddedProductId] = useState<number | null>(null);
 
   const activeProducts = products.filter(p => p.active === 1);
   const filteredProducts = activeCat === 'todos' ? activeProducts : activeProducts.filter(p => p.cat === activeCat);
+
+  const handleAddToCart = (p: Product) => {
+    addToCart(p);
+    setAddedProductId(p.id);
+    setTimeout(() => setAddedProductId(null), 500);
+  };
 
   return (
     <div className="page">
@@ -512,8 +751,22 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
       </div>
       <div className="products-grid">
         {filteredProducts.map(p => (
-          <div className="product-card" key={p.name}>
-            <div className="product-emoji">{p.emoji}</div>
+          <motion.div 
+            className="product-card" 
+            key={p.name}
+            animate={addedProductId === p.id ? { scale: [1, 1.05, 1], borderColor: ['#e5e7eb', '#f97316', '#e5e7eb'] } : {}}
+            transition={{ duration: 0.3 }}
+          >
+            <div 
+              className="product-emoji" 
+              onClick={() => setSelectedProduct(p)}
+              style={{ cursor: 'pointer', transition: 'transform 0.2s' }}
+              onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
+              onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
+              title="Ver detalhes"
+            >
+              {p.emoji}
+            </div>
             <div className="product-info">
               <div className="product-name">{p.name}</div>
               <div className="product-desc">{p.desc}</div>
@@ -521,70 +774,277 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
                 <span className="product-price">R$ {p.price.toFixed(2).replace('.', ',')}</span>
                 <button 
                   className="btn-orange btn-sm" 
-                  onClick={() => addToCart(p)}
+                  onClick={() => handleAddToCart(p)}
                   disabled={p.stock <= 0}
-                  style={{ opacity: p.stock <= 0 ? 0.5 : 1 }}
+                  style={{ opacity: p.stock <= 0 ? 0.5 : 1, transition: 'all 0.2s', transform: addedProductId === p.id ? 'scale(1.1)' : 'scale(1)' }}
                 >
-                  {p.stock <= 0 ? 'Esgotado' : '+ Adicionar'}
+                  {addedProductId === p.id ? '✓ Adicionado' : (p.stock <= 0 ? 'Esgotado' : '+ Adicionar')}
                 </button>
               </div>
             </div>
-          </div>
+          </motion.div>
         ))}
+      </div>
+
+      <AnimatePresence>
+        {selectedProduct && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed',
+              top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(0,0,0,0.5)',
+              backdropFilter: 'blur(4px)',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              zIndex: 1000,
+              padding: 24
+            }}
+            onClick={() => setSelectedProduct(null)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: 20 }}
+              style={{
+                background: 'var(--bg)',
+                borderRadius: 24,
+                padding: 32,
+                maxWidth: 400,
+                width: '100%',
+                boxShadow: '0 20px 40px rgba(0,0,0,0.2)',
+                textAlign: 'center',
+                position: 'relative'
+              }}
+              onClick={e => e.stopPropagation()}
+            >
+              <button 
+                onClick={() => setSelectedProduct(null)}
+                style={{
+                  position: 'absolute', top: 16, right: 16,
+                  background: 'var(--bg-secondary)', border: 'none',
+                  width: 32, height: 32, borderRadius: '50%',
+                  cursor: 'pointer', fontSize: 16, fontWeight: 'bold',
+                  color: 'var(--muted)', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                }}
+              >
+                ✕
+              </button>
+              
+              <div style={{ 
+                fontSize: 80, 
+                lineHeight: 1, 
+                marginBottom: 16,
+                background: 'var(--primary-soft)',
+                width: 140, height: 140,
+                borderRadius: '50%',
+                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                margin: '0 auto 24px auto',
+                boxShadow: 'inset 0 4px 12px rgba(0,0,0,0.05)'
+              }}>
+                {selectedProduct.emoji}
+              </div>
+              
+              <h2 style={{ margin: '0 0 8px 0', fontSize: 24, color: 'var(--text)' }}>{selectedProduct.name}</h2>
+              
+              <div className="tag tag-orange" style={{ marginBottom: 16 }}>
+                R$ {selectedProduct.price.toFixed(2).replace('.', ',')}
+              </div>
+              
+              <p style={{ color: 'var(--muted)', fontSize: 16, lineHeight: 1.5, margin: '0 0 24px 0' }}>
+                {selectedProduct.desc}
+              </p>
+              
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                <button 
+                  className="btn-orange" 
+                  style={{ flex: 1, padding: '12px 24px', fontSize: 16, transition: 'all 0.2s', transform: addedProductId === selectedProduct.id ? 'scale(1.05)' : 'scale(1)' }}
+                  onClick={() => {
+                    handleAddToCart(selectedProduct);
+                    setTimeout(() => setSelectedProduct(null), 500);
+                  }}
+                  disabled={selectedProduct.stock <= 0}
+                >
+                  {addedProductId === selectedProduct.id ? '✓ Adicionado' : (selectedProduct.stock <= 0 ? 'Esgotado' : 'Adicionar ao Carrinho')}
+                </button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
+
+function ScreenCarrinho({ goTo, cart, changeQty, clearCart, finalizarPedido }: { goTo: (s: Screen) => void, cart: CartItem[], changeQty: (i: number, d: number) => void, clearCart: () => void, finalizarPedido: () => void }) {
+  const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+
+  return (
+    <div className="page">
+      <div className="hero">
+        <h1>🛒 Meu Carrinho</h1>
+        <p>Revise seus itens antes de finalizar</p>
+      </div>
+      <div className="cart-layout">
+        <div className="card">
+          <div>
+            {cart.length === 0 ? (
+              <p style={{ color: 'var(--muted)', padding: '20px 0' }}>Seu carrinho está vazio.</p>
+            ) : (
+              cart.map((item, idx) => (
+                <div className="cart-item" key={item.name}>
+                  <span className="cart-emoji">{item.emoji}</span>
+                  <div className="cart-item-info">
+                    <div className="cart-item-name">{item.name}</div>
+                    <div className="cart-item-price">R$ {item.price.toFixed(2).replace('.', ',')}</div>
+                  </div>
+                  <div className="qty-ctrl">
+                    <button className="qty-btn" onClick={() => changeQty(idx, -1)}>−</button>
+                    <strong>{item.qty}</strong>
+                    <button className="qty-btn" onClick={() => changeQty(idx, 1)}>+</button>
+                  </div>
+                  <strong style={{ minWidth: 64, textAlign: 'right', color: 'var(--success)' }}>
+                    R$ {(item.price * item.qty).toFixed(2).replace('.', ',')}
+                  </strong>
+                </div>
+              ))
+            )}
+          </div>
+          <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+            <button className="btn-secondary btn-sm" onClick={() => goTo('catalogo')}>← Continuar comprando</button>
+            <button className="btn-danger btn-sm" onClick={clearCart}>🗑 Limpar carrinho</button>
+          </div>
+        </div>
+        <div>
+          <div className="card order-summary">
+            <h3>Resumo do Pedido</h3>
+            <div>
+              {cart.map(item => (
+                <div className="summary-line" key={item.name}>
+                  <span>{item.name} × {item.qty}</span>
+                  <span>R$ {(item.price * item.qty).toFixed(2).replace('.', ',')}</span>
+                </div>
+              ))}
+            </div>
+            <div className="summary-total">
+              <span>Total</span>
+              <span style={{ color: 'var(--success)' }}>R$ {total.toFixed(2).replace('.', ',')}</span>
+            </div>
+            <button className="btn-orange btn-full" style={{ marginTop: 20 }} onClick={finalizarPedido}>
+              ✅ Finalizar Pedido
+            </button>
+          </div>
+        </div>
       </div>
     </div>
   );
 }
 
-function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCanteens, categories, fetchCategories }: { products: Product[], fetchProducts: () => void, showToast: (msg: string) => void, canteens: Canteen[], fetchCanteens: () => void, categories: Category[], fetchCategories: () => void }) {
-  const [activeTab, setActiveTab] = useState<'pedidos' | 'produtos' | 'cardapio' | 'config'>('pedidos');
-  const [orders, setOrders] = useState<Order[]>([]);
-  
-  // Settings state
-  const myCanteen = canteens[0] || null; // Assume gestor manages the first canteen
-  const [canteenName, setCanteenName] = useState(myCanteen?.name || '');
-  const [canteenDesc, setCanteenDesc] = useState(myCanteen?.desc || '');
-  const [canteenLocation, setCanteenLocation] = useState(myCanteen?.location || '');
-  const [canteenEmoji, setCanteenEmoji] = useState(myCanteen?.emoji || '');
-  const [canteenColor, setCanteenColor] = useState(myCanteen?.color || '#ffffff');
-  const [openTime, setOpenTime] = useState(myCanteen?.open_time || '08:00');
-  const [closeTime, setCloseTime] = useState(myCanteen?.close_time || '18:00');
-  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+function ScreenConfirmacao({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCode: string }) {
+  return (
+    <div className="page" style={{ maxWidth: 600 }}>
+      <div className="card" style={{ textAlign: 'center', padding: 40 }}>
+        <div style={{ fontSize: 56, marginBottom: 16 }}>🎉</div>
+        <div className="tag tag-success">Pedido Confirmado!</div>
+        <h2 style={{ margin: '16px 0 8px' }}>Seu pedido foi enviado para a cantina</h2>
+        <p style={{ color: 'var(--muted)', marginBottom: 28 }}>Apresente o QR Code abaixo na hora da retirada</p>
+        <div className="qr-box">📱</div>
+        <div style={{ margin: '16px 0', fontSize: 22, fontWeight: 'bold', letterSpacing: 4, color: 'var(--orange)' }}>
+          {orderCode}
+        </div>
+        <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 28 }}>
+          Guarde este código — ele é único para o seu pedido
+        </p>
+        <button className="btn-orange btn-full" onClick={() => goTo('status')}>
+          📍 Acompanhar Status do Pedido
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function ScreenStatus({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCode: string }) {
+  const [status, setStatus] = useState<'aguardando' | 'preparo' | 'pronto' | 'retirado' | 'cancelado'>('aguardando');
 
   useEffect(() => {
-    if (myCanteen) {
-      setCanteenName(myCanteen.name);
-      setCanteenDesc(myCanteen.desc);
-      setCanteenLocation(myCanteen.location || '');
-      setCanteenEmoji(myCanteen.emoji);
-      setCanteenColor(myCanteen.color);
-      setOpenTime(myCanteen.open_time);
-      setCloseTime(myCanteen.close_time);
-    }
-  }, [myCanteen]);
+    if (!orderCode) return;
+    
+    const fetchStatus = async () => {
+      try {
+        const res = await fetch(`/api/orders/${orderCode}`);
+        if (res.ok) {
+          const data = await res.json();
+          setStatus(data.status);
+        }
+      } catch (err) {
+        console.error('Erro ao buscar status', err);
+      }
+    };
 
-  const handleSaveSettings = async () => {
-    if (!myCanteen) return;
-    try {
-      await fetch(`/api/canteens/${myCanteen.id}`, {
-        method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          name: canteenName,
-          desc: canteenDesc,
-          location: canteenLocation,
-          emoji: canteenEmoji,
-          color: canteenColor,
-          open_time: openTime, 
-          close_time: closeTime 
-        })
-      });
-      showToast('✅ Configurações atualizadas!');
-      fetchCanteens();
-    } catch (err) {
-      showToast('Erro ao atualizar configurações.');
-    }
-  };
+    fetchStatus();
+    const interval = setInterval(fetchStatus, 3000); // Poll every 3 seconds
+    return () => clearInterval(interval);
+  }, [orderCode]);
 
-
-
+  return (
+    <div className="page" style={{ maxWidth: 600 }}>
+      <div className="hero">
+        <h1>📍 Status do Pedido</h1>
+        <p>Código: <strong style={{ color: 'var(--orange)' }}>{orderCode}</strong></p>
+      </div>
+      <div className="card">
+        {status === 'cancelado' ? (
+          <div style={{ textAlign: 'center', padding: 20 }}>
+            <div style={{ fontSize: 40, marginBottom: 10 }}>❌</div>
+            <h3 style={{ color: 'var(--danger)' }}>Pedido Cancelado</h3>
+            <p style={{ color: 'var(--muted)', marginTop: 8 }}>Seu pedido foi cancelado pela cantina.</p>
+          </div>
+        ) : (
+          <div className="status-steps">
+            <div className="step done">
+              <div className="step-icon">✓</div>
+              <div className="step-text">
+                <div className="step-label">Pedido Confirmado</div>
+                <div className="step-sublabel">Código QR gerado com sucesso</div>
+              </div>
+            </div>
+            <div className={`step ${status === 'aguardando' ? 'active' : 'done'}`}>
+              <div className="step-icon">{status === 'aguardando' ? '⏳' : '✓'}</div>
+              <div className="step-text">
+                <div className="step-label">Aguardando Cantina</div>
+                <div className="step-sublabel">Aguardando confirmação da cantina</div>
+              </div>
+            </div>
+            <div className={`step ${status === 'preparo' ? 'active' : (status === 'pronto' || status === 'retirado' ? 'done' : '')}`}>
+              <div className="step-icon">{status === 'preparo' ? '👨‍🍳' : (status === 'pronto' || status === 'retirado' ? '✓' : '⏳')}</div>
+              <div className="step-text">
+                <div className="step-label">Em Preparo</div>
+                <div className="step-sublabel">Sua comida está sendo preparada...</div>
+              </div>
+            </div>
+            <div className={`step ${status === 'pronto' ? 'active' : (status === 'retirado' ? 'done' : '')}`}>
+              <div className="step-icon">{status === 'pronto' ? '🔔' : (status === 'retirado' ? '✓' : '⏳')}</div>
+              <div className="step-text">
+                <div className="step-label">Pronto para Retirada</div>
+                <div className="step-sublabel">{status === 'pronto' ? 'Vá buscar seu pedido!' : 'Aguardando...'}</div>
+              </div>
+            </div>
+            <div className={`step ${status === 'retirado' ? 'active' : ''}`}>
+              <div className="step-icon">{status === 'retirado' ? '✅' : '⏳'}</div>
+              <div className="step-text">
+                <div className="step-label">Retirado</div>
+                <div className="step-sublabel">{status === 'retirado' ? 'Pedido finalizado' : 'Aguardando...'}</div>
+              </div>
+            </div>
+          </div>
+        )}
+        <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap', marginTop: 20 }}>
+          <button className="btn-secondary btn-sm" onClick={() => goTo('cantinas')}>Fazer novo pedido</button>
+        </div>
+      </div>
+    </div>
+  );
+}
