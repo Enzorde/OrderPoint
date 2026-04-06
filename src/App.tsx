@@ -1048,3 +1048,392 @@ function ScreenStatus({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCod
     </div>
   );
 }
+
+function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCanteens }: { goTo: (s: Screen) => void, currentUser: User | null, setOrderCode: (c: string) => void, showToast: (msg: string) => void, fetchCanteens: () => void }) {
+  const [myOrders, setMyOrders] = useState<Order[]>([]);
+  const prevMyOrdersRef = useRef<Order[]>([]);
+
+  const fetchMyOrders = async () => {
+    if (!currentUser) return;
+    try {
+      const res = await fetch(`/api/orders/user/${encodeURIComponent(currentUser.id)}`);
+      if (res.ok) {
+        const data = await res.json();
+        
+        if (prevMyOrdersRef.current.length > 0) {
+          data.forEach((order: Order) => {
+            const prevOrder = prevMyOrdersRef.current.find(p => p.id === order.id);
+            if (prevOrder && prevOrder.status !== order.status) {
+              playNotificationSound();
+              showToast(`🔔 O status do seu pedido ${order.code} mudou para: ${getStatusText(order.status)}`);
+            }
+          });
+        }
+        
+        prevMyOrdersRef.current = data;
+        setMyOrders(data);
+      }
+    } catch (err) {
+      console.error('Erro ao buscar meus pedidos', err);
+    }
+  };
+
+  useEffect(() => {
+    fetchMyOrders();
+    const interval = setInterval(fetchMyOrders, 5000);
+    return () => clearInterval(interval);
+  }, [currentUser]);
+
+  const handleRate = async (orderId: number, canteenId: number, score: number) => {
+    try {
+      const res = await fetch('/api/ratings', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ order_id: orderId, canteen_id: canteenId, score })
+      });
+      if (res.ok) {
+        showToast('⭐ Avaliação enviada com sucesso!');
+        fetchMyOrders();
+        fetchCanteens();
+      } else {
+        showToast('Erro ao enviar avaliação.');
+      }
+    } catch (err) {
+      showToast('Erro ao enviar avaliação.');
+    }
+  };
+
+  const getStatusText = (status: string) => {
+    switch(status) {
+      case 'aguardando': return '⏳ Aguardando Cantina';
+      case 'preparo': return '👨‍🍳 Em Preparo';
+      case 'pronto': return '🔔 Pronto para Retirada';
+      case 'retirado': return '✅ Retirado';
+      case 'cancelado': return '❌ Cancelado';
+      default: return status;
+    }
+  };
+
+  const getStatusColor = (status: string) => {
+    switch(status) {
+      case 'aguardando': return { background: '#f0f7ff', color: 'var(--primary)' };
+      case 'preparo': return { background: '#fff4e6', color: 'var(--orange)' };
+      case 'pronto': return { background: '#e6f4ea', color: 'var(--success)' };
+      case 'retirado': return { background: '#f1f3f4', color: 'var(--muted)' };
+      case 'cancelado': return { background: '#fce8e6', color: 'var(--danger)' };
+      default: return {};
+    }
+  };
+
+  return (
+    <div className="page">
+      <div className="hero">
+        <h1>📦 Meus Pedidos</h1>
+        <p>Acompanhe o histórico e status dos seus pedidos</p>
+      </div>
+      <div className="orders-list" style={{ maxWidth: 800, margin: '0 auto' }}>
+        {myOrders.length === 0 ? (
+          <div className="card" style={{ textAlign: 'center', padding: 40 }}>
+            <p style={{ color: 'var(--muted)' }}>Você ainda não fez nenhum pedido.</p>
+            <button className="btn-orange" style={{ marginTop: 16 }} onClick={() => goTo('cantinas')}>Fazer meu primeiro pedido</button>
+          </div>
+        ) : (
+          myOrders.map(order => {
+            const items: CartItem[] = JSON.parse(order.items);
+            const itemsText = items.map(i => `${i.qty}x ${i.name}`).join(', ');
+            
+            return (
+              <div className="order-card" key={order.id}>
+                <div>
+                  <div className="order-id">Pedido {order.code}</div>
+                  <div className="order-meta" style={{ marginBottom: 8 }}>{itemsText}</div>
+                  <div style={{ fontWeight: 600 }}>Total: R$ {order.total.toFixed(2).replace('.', ',')}</div>
+                </div>
+                <div className="order-actions-user">
+                  <span className="tag" style={getStatusColor(order.status)}>{getStatusText(order.status)}</span>
+                  {order.status !== 'retirado' && order.status !== 'cancelado' && (
+                    <button 
+                      className="btn-secondary btn-sm" 
+                      onClick={() => {
+                        setOrderCode(order.code);
+                        goTo('status');
+                      }}
+                    >
+                      Ver Detalhes
+                    </button>
+                  )}
+                  {order.status === 'retirado' && !order.rating && (
+                    <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                      {[1, 2, 3, 4, 5].map(star => (
+                        <span 
+                          key={star} 
+                          style={{ cursor: 'pointer', fontSize: 20, color: '#d1d5db' }}
+                          onClick={() => handleRate(order.id, order.canteen_id, star)}
+                          onMouseEnter={(e) => {
+                            const siblings = e.currentTarget.parentElement?.children;
+                            if (siblings) {
+                              for (let i = 0; i < siblings.length; i++) {
+                                (siblings[i] as HTMLElement).style.color = i < star ? '#f59e0b' : '#d1d5db';
+                              }
+                            }
+                          }}
+                          onMouseLeave={(e) => {
+                            const siblings = e.currentTarget.parentElement?.children;
+                            if (siblings) {
+                              for (let i = 0; i < siblings.length; i++) {
+                                (siblings[i] as HTMLElement).style.color = '#d1d5db';
+                              }
+                            }
+                          }}
+                        >
+                          ★
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                  {order.status === 'retirado' && order.rating && (
+                    <div style={{ display: 'flex', gap: 2, marginTop: 4 }}>
+                      {[1, 2, 3, 4, 5].map(star => (
+                        <span key={star} style={{ fontSize: 16, color: star <= order.rating! ? '#f59e0b' : '#d1d5db' }}>★</span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCanteens, categories, fetchCategories }: { products: Product[], fetchProducts: () => void, showToast: (msg: string) => void, canteens: Canteen[], fetchCanteens: () => void, categories: Category[], fetchCategories: () => void }) {
+  const [activeTab, setActiveTab] = useState<'pedidos' | 'produtos' | 'cardapio' | 'config'>('pedidos');
+  const [orders, setOrders] = useState<Order[]>([]);
+  const [orderFilter, setOrderFilter] = useState<string>('todos');
+  
+  // Settings state
+  const myCanteen = canteens[0] || null; // Assume gestor manages the first canteen
+  const [canteenName, setCanteenName] = useState(myCanteen?.name || '');
+  const [canteenDesc, setCanteenDesc] = useState(myCanteen?.desc || '');
+  const [canteenLocation, setCanteenLocation] = useState(myCanteen?.location || '');
+  const [canteenEmoji, setCanteenEmoji] = useState(myCanteen?.emoji || '');
+  const [canteenColor, setCanteenColor] = useState(myCanteen?.color || '#ffffff');
+  const [openTime, setOpenTime] = useState(myCanteen?.open_time || '08:00');
+  const [closeTime, setCloseTime] = useState(myCanteen?.close_time || '18:00');
+  const [showEmojiPicker, setShowEmojiPicker] = useState(false);
+
+  useEffect(() => {
+    if (myCanteen) {
+      setCanteenName(myCanteen.name);
+      setCanteenDesc(myCanteen.desc);
+      setCanteenLocation(myCanteen.location || '');
+      setCanteenEmoji(myCanteen.emoji);
+      setCanteenColor(myCanteen.color);
+      setOpenTime(myCanteen.open_time);
+      setCloseTime(myCanteen.close_time);
+    }
+  }, [myCanteen]);
+
+  const handleSaveSettings = async () => {
+    if (!myCanteen) return;
+    try {
+      await fetch(`/api/canteens/${myCanteen.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          name: canteenName,
+          desc: canteenDesc,
+          location: canteenLocation,
+          emoji: canteenEmoji,
+          color: canteenColor,
+          open_time: openTime, 
+          close_time: closeTime 
+        })
+      });
+      showToast('✅ Configurações atualizadas!');
+      fetchCanteens();
+    } catch (err) {
+      showToast('Erro ao atualizar configurações.');
+    }
+  };
+  
+  // States for the product form
+  const [editingId, setEditingId] = useState<number | null>(null);
+  const [formName, setFormName] = useState('');
+  const [formCat, setFormCat] = useState(categories.length > 0 ? categories[0].name : 'salgados');
+  const [formPrice, setFormPrice] = useState('');
+  const [formDesc, setFormDesc] = useState('');
+  const [formEmoji, setFormEmoji] = useState('🍽️');
+  const [formStock, setFormStock] = useState('10');
+  const [showProductEmojiPicker, setShowProductEmojiPicker] = useState(false);
+  
+  // Category management
+  const [newCatName, setNewCatName] = useState('');
+  const [isAddingCat, setIsAddingCat] = useState(false);
+  const [deleteCatConfirmId, setDeleteCatConfirmId] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (categories.length > 0 && !formCat) {
+      setFormCat(categories[0].name);
+    }
+  }, [categories]);
+
+  const handleAddCategory = async () => {
+    if (!newCatName) return;
+    try {
+      const res = await fetch('/api/categories', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name: newCatName.toLowerCase() })
+      });
+      if (res.ok) {
+        showToast('✅ Categoria adicionada!');
+        setNewCatName('');
+        setIsAddingCat(false);
+        fetchCategories();
+      } else {
+        showToast('Erro ao adicionar categoria.');
+      }
+    } catch (err) {
+      showToast('Erro ao adicionar categoria.');
+    }
+  };
+
+  const handleDeleteCategory = async (id: number) => {
+    try {
+      const res = await fetch(`/api/categories/${id}`, { method: 'DELETE' });
+      if (res.ok) {
+        showToast('🗑️ Categoria excluída!');
+        setDeleteCatConfirmId(null);
+        fetchCategories();
+      } else {
+        showToast('Erro ao excluir categoria.');
+      }
+    } catch (err) {
+      showToast('Erro ao excluir categoria.');
+    }
+  };
+
+  const handleEditClick = (p: Product) => {
+    setEditingId(p.id);
+    setFormName(p.name);
+    setFormCat(p.cat);
+    setFormPrice(p.price.toString());
+    setFormDesc(p.desc);
+    setFormEmoji(p.emoji);
+    setFormStock(p.stock.toString());
+    setActiveTab('cardapio');
+  };
+
+  const handleNewClick = () => {
+    setEditingId(null);
+    setFormName('');
+    setFormCat('salgados');
+    setFormPrice('');
+    setFormDesc('');
+    setFormEmoji('🍽️');
+    setFormStock('10');
+    setActiveTab('cardapio');
+  };
+
+  const handleSaveProduct = async () => {
+    if (!formName || !formPrice) {
+      showToast('Nome e preço são obrigatórios!');
+      return;
+    }
+
+    const payload = {
+      name: formName,
+      cat: formCat,
+      price: parseFloat(formPrice),
+      desc: formDesc,
+      emoji: formEmoji,
+      stock: parseInt(formStock, 10) || 0
+    };
+
+    try {
+      if (editingId) {
+        await fetch(`/api/products/${editingId}`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        showToast('✅ Produto atualizado!');
+      } else {
+        await fetch('/api/products', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        showToast('✅ Produto adicionado!');
+      }
+      fetchProducts();
+      setActiveTab('produtos');
+    } catch (err) {
+      showToast('Erro ao salvar produto.');
+    }
+  };
+
+  const handleToggleStatus = async (p: Product) => {
+    try {
+      await fetch(`/api/products/${p.id}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ...p, active: p.active === 1 ? 0 : 1 })
+      });
+      fetchProducts();
+    } catch (err) {
+      showToast('Erro ao alterar status.');
+    }
+  };
+
+  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
+  const [deleteOrderConfirmId, setDeleteOrderConfirmId] = useState<number | null>(null);
+
+  const handleDelete = async (id: number) => {
+    try {
+      await fetch(`/api/products/${id}`, { method: 'DELETE' });
+      showToast('🗑️ Produto excluído!');
+      fetchProducts();
+      setDeleteConfirmId(null);
+    } catch (err) {
+      showToast('Erro ao excluir produto.');
+    }
+  };
+
+  const handleDeleteOrder = async (id: number) => {
+    try {
+      await fetch(`/api/orders/${id}`, { method: 'DELETE' });
+      showToast('🗑️ Pedido excluído!');
+      fetchOrders();
+      setDeleteOrderConfirmId(null);
+    } catch (err) {
+      showToast('Erro ao excluir pedido.');
+    }
+  };
+
+  const prevOrdersRef = useRef<Order[]>([]);
+
+  const fetchOrders = async () => {
+    try {
+      const res = await fetch('/api/orders');
+      if (res.ok) {
+        const data = await res.json();
+        
+        if (prevOrdersRef.current.length > 0) {
+          const newOrders = data.filter((o: Order) => !prevOrdersRef.current.find(prev => prev.id === o.id));
+          if (newOrders.length > 0) {
+            playNotificationSound();
+            showToast(`🔔 Novo pedido recebido! (${newOrders[0].code})`);
+          }
+        }
+        
+        prevOrdersRef.current = data;
+        setOrders(data);
+      }
+    } catch (err) {
+      console.error('Erro ao buscar pedidos', err);
+    }
+  };
