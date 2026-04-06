@@ -43,6 +43,59 @@ const swaggerDocument = {
           }
         }
       }
+    },
+    '/cantinas': {
+      get: {
+        summary: 'Retorna nome e foto das 3 cantinas',
+        responses: {
+          '200': {
+            description: 'Lista de cantinas'
+          }
+        }
+      }
+    },
+    '/produtos': {
+      get: {
+        summary: 'Retorna produtos ativos, opcionalmente filtrados por categoria',
+        parameters: [
+          {
+            name: 'categoria',
+            in: 'query',
+            required: false,
+            schema: {
+              type: 'string'
+            }
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Lista de produtos'
+          }
+        }
+      }
+    },
+    '/produtos/{id}': {
+      get: {
+        summary: 'Retorna foto, nome, ingredientes e preço de um produto',
+        parameters: [
+          {
+            name: 'id',
+            in: 'path',
+            required: true,
+            schema: {
+              type: 'integer'
+            }
+          }
+        ],
+        responses: {
+          '200': {
+            description: 'Detalhes do produto'
+          },
+          '404': {
+            description: 'Produto não encontrado'
+          }
+        }
+      }
     }
   }
 };
@@ -304,6 +357,36 @@ class ProductController extends BaseController {
     this.app.post("/api/products", this.create.bind(this));
     this.app.put("/api/products/:id", this.update.bind(this));
     this.app.delete("/api/products/:id", this.delete.bind(this));
+    this.app.get("/produtos", this.getProdutos.bind(this));
+    this.app.get("/produtos/:id", this.getProdutoById.bind(this));
+  }
+
+  private getProdutos(req: Request, res: Response) {
+    const { categoria } = req.query;
+    try {
+      let products;
+      if (categoria) {
+        products = this.db.prepare('SELECT * FROM products WHERE active = 1 AND cat = ?').all(categoria);
+      } else {
+        products = this.db.prepare('SELECT * FROM products WHERE active = 1').all();
+      }
+      res.json(products);
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao buscar produtos." });
+    }
+  }
+
+  private getProdutoById(req: Request, res: Response) {
+    try {
+      const product = this.db.prepare('SELECT emoji as foto, name as nome, desc as ingredientes, price as preco FROM products WHERE id = ?').get(req.params.id);
+      if (product) {
+        res.json(product);
+      } else {
+        res.status(404).json({ error: "Produto não encontrado." });
+      }
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao buscar produto." });
+    }
   }
 
   private getAll(req: Request, res: Response) {
@@ -357,6 +440,16 @@ class CanteenController extends BaseController {
   public registerRoutes() {
     this.app.get("/api/canteens", this.getAll.bind(this));
     this.app.put("/api/canteens/:id", this.update.bind(this));
+    this.app.get("/cantinas", this.getCantinas.bind(this));
+  }
+
+  private getCantinas(req: Request, res: Response) {
+    try {
+      const canteens = this.db.prepare(`SELECT name, emoji as foto FROM canteens LIMIT 3`).all();
+      res.json(canteens);
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao buscar cantinas." });
+    }
   }
 
   private getAll(req: Request, res: Response) {
@@ -430,6 +523,32 @@ class CategoryController extends BaseController {
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Erro ao deletar categoria." });
+    }
+  }
+}
+
+class RatingController extends BaseController {
+  constructor(db: DatabaseSync, app: express.Application) {
+    super(db, app);
+  }
+
+  public registerRoutes() {
+    this.app.post("/api/ratings", this.create.bind(this));
+  }
+
+  private create(req: Request, res: Response) {
+    const { order_id, canteen_id, score } = req.body;
+    if (!order_id || !canteen_id || !score) return res.status(400).json({ error: "Dados incompletos." });
+    try {
+      const insert = this.db.prepare('INSERT INTO ratings (order_id, canteen_id, score) VALUES (?, ?, ?)');
+      insert.run(order_id, canteen_id, score);
+      res.status(201).json({ success: true });
+    } catch (error: any) {
+      if (error.message && error.message.includes("UNIQUE constraint failed")) {
+        res.status(400).json({ error: "Pedido já avaliado." });
+      } else {
+        res.status(500).json({ error: "Erro ao salvar avaliação." });
+      }
     }
   }
 }
@@ -630,6 +749,7 @@ class AppServer {
       new ProductController(this.dbManager.db, this.app),
       new CanteenController(this.dbManager.db, this.app),
       new CategoryController(this.dbManager.db, this.app),
+      new RatingController(this.dbManager.db, this.app),
       new OrderController(this.dbManager.db, this.app)
     ];
 
@@ -663,4 +783,3 @@ class AppServer {
 // Start the server
 const server = new AppServer();
 server.start(3000);
-
