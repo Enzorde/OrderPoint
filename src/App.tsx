@@ -1437,3 +1437,391 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
       console.error('Erro ao buscar pedidos', err);
     }
   };
+
+  const updateOrderStatus = async (id: number, status: string) => {
+    try {
+      await fetch(`/api/orders/${id}/status`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status })
+      });
+      fetchOrders();
+      if (status === 'cancelado') {
+        fetchProducts();
+      }
+    } catch (err) {
+      showToast('Erro ao atualizar status.');
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'pedidos') {
+      fetchOrders();
+      const interval = setInterval(fetchOrders, 5000);
+      return () => clearInterval(interval);
+    }
+  }, [activeTab]);
+
+  return (
+    <div className="page">
+      <div className="hero">
+        <div className="tag tag-orange">Painel do Gestor</div>
+        <h1>{myCanteen?.name || 'Cantina Central'} {myCanteen?.emoji || '🍽️'}</h1>
+        <p>Gerencie pedidos e produtos da sua cantina</p>
+      </div>
+
+      <div className="gestor-tabs">
+        <button className={`gestor-tab ${activeTab === 'pedidos' ? 'active' : ''}`} onClick={() => setActiveTab('pedidos')}>📋 Pedidos</button>
+        <button className={`gestor-tab ${activeTab === 'produtos' ? 'active' : ''}`} onClick={() => setActiveTab('produtos')}>🥘 Produtos</button>
+        <button className={`gestor-tab ${activeTab === 'cardapio' ? 'active' : ''}`} onClick={() => setActiveTab('cardapio')}>📝 Cardápio</button>
+        <button className={`gestor-tab ${activeTab === 'config' ? 'active' : ''}`} onClick={() => setActiveTab('config')}>⚙️ Configurações</button>
+      </div>
+
+      {activeTab === 'config' && (
+        <div className="gestor-panel active">
+          <div className="card">
+            <h3 style={{ marginBottom: 16 }}>Configurações da Cantina</h3>
+            
+            {myCanteen && (
+              <div style={{ marginBottom: 20, padding: 12, background: 'var(--bg-secondary)', borderRadius: 8 }}>
+                <strong>Avaliação Atual: </strong>
+                <span style={{ color: '#f59e0b' }}>★</span> {Number(myCanteen.avg_rating).toFixed(1)} ({myCanteen.rating_count} avaliações)
+              </div>
+            )}
+
+            <div className="form">
+              <label>Nome da Cantina
+                <input type="text" value={canteenName} onChange={e => setCanteenName(e.target.value)} />
+              </label>
+              <label>Descrição
+                <input type="text" value={canteenDesc} onChange={e => setCanteenDesc(e.target.value)} />
+              </label>
+              <label>Localização
+                <input type="text" value={canteenLocation} onChange={e => setCanteenLocation(e.target.value)} />
+              </label>
+              <label style={{ position: 'relative' }}>Emoji
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input type="text" value={canteenEmoji} readOnly style={{ width: 60, textAlign: 'center', cursor: 'pointer' }} onClick={() => setShowEmojiPicker(!showEmojiPicker)} />
+                  <button className="btn-secondary" onClick={() => setShowEmojiPicker(!showEmojiPicker)}>Escolher Emoji</button>
+                </div>
+                {showEmojiPicker && (
+                  <div style={{ position: 'absolute', zIndex: 10, top: '100%', left: 0, marginTop: 4 }}>
+                    <EmojiPicker onEmojiClick={(emojiData) => {
+                      setCanteenEmoji(emojiData.emoji);
+                      setShowEmojiPicker(false);
+                    }} />
+                  </div>
+                )}
+              </label>
+              <label>Cor de Fundo
+                <input type="color" value={canteenColor} onChange={e => setCanteenColor(e.target.value)} style={{ height: 40, padding: 0, cursor: 'pointer' }} />
+              </label>
+              <label>Horário de Abertura
+                <input type="time" value={openTime} onChange={e => setOpenTime(e.target.value)} />
+              </label>
+              <label>Horário de Fechamento
+                <input type="time" value={closeTime} onChange={e => setCloseTime(e.target.value)} />
+              </label>
+              <button className="btn-orange" style={{ marginTop: 12 }} onClick={handleSaveSettings}>Salvar Configurações</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'pedidos' && (
+        <div className="gestor-panel active">
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
+            <button className={`btn-sm ${orderFilter === 'todos' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('todos')}>Todos</button>
+            <button className={`btn-sm ${orderFilter === 'aguardando' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('aguardando')}>Aguardando</button>
+            <button className={`btn-sm ${orderFilter === 'preparo' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('preparo')}>Em Preparo</button>
+            <button className={`btn-sm ${orderFilter === 'pronto' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('pronto')}>Pronto</button>
+            <button className={`btn-sm ${orderFilter === 'retirado' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('retirado')}>Retirado</button>
+            <button className={`btn-sm ${orderFilter === 'cancelado' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('cancelado')}>Cancelado</button>
+          </div>
+          <div className="orders-list">
+            {orders.length === 0 ? (
+              <p style={{ color: 'var(--muted)' }}>Nenhum pedido ativo no momento.</p>
+            ) : (
+              orders
+                .filter(o => orderFilter === 'todos' || o.status === orderFilter)
+                .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                .map(order => {
+                  const items: CartItem[] = JSON.parse(order.items);
+                  const itemsText = items.map(i => `${i.name} × ${i.qty}`).join(' + ');
+                  const orderTime = new Date(order.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                  
+                  return (
+                    <div className="order-card" key={order.id}>
+                      <div>
+                        <div className="order-id">
+                          Pedido {order.code} <span style={{ color: 'var(--muted)', fontSize: 12, fontWeight: 'normal', marginLeft: 8 }}>🕒 {orderTime}</span>
+                        </div>
+                        <div className="order-meta">{order.user_name} · {itemsText} · R$ {order.total.toFixed(2).replace('.', ',')}</div>
+                      </div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
+                        {order.status === 'aguardando' && (
+                          <>
+                            <span className="tag" style={{ background: '#f0f7ff', color: 'var(--primary)' }}>Aguardando</span>
+                            <div className="order-actions">
+                              <button className="btn-orange btn-sm" onClick={() => updateOrderStatus(order.id, 'preparo')}>Aceitar</button>
+                              <button className="btn-danger btn-sm" onClick={() => updateOrderStatus(order.id, 'cancelado')}>Recusar</button>
+                            </div>
+                          </>
+                        )}
+                        {order.status === 'preparo' && (
+                          <>
+                            <span className="tag tag-orange">Em Preparo</span>
+                            <div className="order-actions">
+                              <button className="btn-success btn-sm" onClick={() => updateOrderStatus(order.id, 'pronto')}>Pronto!</button>
+                              <button className="btn-danger btn-sm" onClick={() => updateOrderStatus(order.id, 'cancelado')}>Cancelar</button>
+                            </div>
+                          </>
+                        )}
+                        {order.status === 'pronto' && (
+                          <>
+                            <span className="tag tag-success">Pronto para Retirada</span>
+                            <div className="order-actions">
+                              <button className="btn-success btn-sm" onClick={() => updateOrderStatus(order.id, 'retirado')}>Marcar como Retirado</button>
+                            </div>
+                          </>
+                        )}
+                        {order.status === 'retirado' && (
+                          <>
+                            <span className="tag" style={{ background: '#f3f4f6', color: '#4b5563' }}>Retirado</span>
+                            <div className="order-actions">
+                              <button className="btn-danger btn-sm" onClick={() => setDeleteOrderConfirmId(order.id)}>Excluir</button>
+                            </div>
+                          </>
+                        )}
+                        {order.status === 'cancelado' && (
+                          <>
+                            <span className="tag tag-danger">Cancelado</span>
+                            <div className="order-actions">
+                              <button className="btn-danger btn-sm" onClick={() => setDeleteOrderConfirmId(order.id)}>Excluir</button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'produtos' && (
+        <div className="gestor-panel active">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <h3>Produtos cadastrados</h3>
+            <button className="btn-orange btn-sm" onClick={handleNewClick}>+ Novo Produto</button>
+          </div>
+          <div style={{ display: 'grid', gap: 12 }}>
+            {products.map(p => (
+              <div className="order-card" key={p.id}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                  <span style={{ fontSize: 28 }}>{p.emoji}</span>
+                  <div>
+                    <div className="order-id">{p.name}</div>
+                    <div className="order-meta">{p.cat} · R$ {p.price.toFixed(2).replace('.', ',')} · Estoque: {p.stock}</div>
+                  </div>
+                </div>
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                  {p.active === 1 ? (
+                    <>
+                      <span className="tag tag-success">Disponível</span>
+                      <button className="btn-danger btn-sm" onClick={() => handleToggleStatus(p)}>Pausar</button>
+                    </>
+                  ) : (
+                    <>
+                      <span className="tag" style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}>Pausado</span>
+                      <button className="btn-success btn-sm" onClick={() => handleToggleStatus(p)}>Ativar</button>
+                    </>
+                  )}
+                  <button className="btn-secondary btn-sm" onClick={() => handleEditClick(p)}>Editar</button>
+                  <button className="btn-danger btn-sm" onClick={() => setDeleteConfirmId(p.id)}>Excluir</button>
+                </div>
+              </div>
+            ))}
+            {products.length === 0 && (
+              <p style={{ color: 'var(--muted)' }}>Nenhum produto cadastrado.</p>
+            )}
+          </div>
+        </div>
+      )}
+
+      {activeTab === 'cardapio' && (
+        <div className="gestor-panel active">
+          <div className="card">
+            <h3 style={{ marginBottom: 16 }}>{editingId ? 'Editar Produto' : 'Adicionar ao Cardápio'}</h3>
+            <div className="form">
+              <label style={{ position: 'relative' }}>Emoji
+                <div style={{ display: 'flex', gap: 8 }}>
+                  <input type="text" value={formEmoji} readOnly style={{ width: 60, textAlign: 'center', cursor: 'pointer' }} onClick={() => setShowProductEmojiPicker(!showProductEmojiPicker)} />
+                  <button className="btn-secondary" onClick={() => setShowProductEmojiPicker(!showProductEmojiPicker)}>Escolher Emoji</button>
+                </div>
+                {showProductEmojiPicker && (
+                  <div style={{ position: 'absolute', zIndex: 10, top: '100%', left: 0, marginTop: 4 }}>
+                    <EmojiPicker onEmojiClick={(emojiData) => {
+                      setFormEmoji(emojiData.emoji);
+                      setShowProductEmojiPicker(false);
+                    }} />
+                  </div>
+                )}
+              </label>
+              <label>Nome do produto
+                <input type="text" placeholder="Ex: Pão de Queijo" value={formName} onChange={e => setFormName(e.target.value)} />
+              </label>
+              <label>Categoria
+                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
+                  <select value={formCat} onChange={e => setFormCat(e.target.value)} style={{ flex: 1 }}>
+                    {categories.map(cat => (
+                      <option key={cat.id} value={cat.name}>{cat.name.charAt(0).toUpperCase() + cat.name.slice(1)}</option>
+                    ))}
+                  </select>
+                  <button className="btn-secondary btn-sm" onClick={() => setIsAddingCat(!isAddingCat)}>
+                    {isAddingCat ? 'Cancelar' : '+ Nova'}
+                  </button>
+                </div>
+              </label>
+              
+              {isAddingCat && (
+                <div style={{ display: 'flex', gap: 8, marginBottom: 16, padding: 12, background: 'var(--bg-secondary)', borderRadius: 8 }}>
+                  <input type="text" placeholder="Nome da categoria" value={newCatName} onChange={e => setNewCatName(e.target.value)} style={{ flex: 1, marginBottom: 0 }} />
+                  <button className="btn-orange btn-sm" onClick={handleAddCategory}>Salvar</button>
+                </div>
+              )}
+
+              {categories.length > 0 && !isAddingCat && (
+                <div style={{ marginBottom: 16 }}>
+                  <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>Gerenciar Categorias:</p>
+                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+                    {categories.map(cat => (
+                      <div key={cat.id} className="tag" style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', background: 'white', border: '1px solid var(--line)', color: 'var(--text)' }}>
+                        {cat.name}
+                        <span style={{ cursor: 'pointer', color: 'var(--danger)', marginLeft: 4, padding: '0 4px', fontWeight: 'bold' }} onClick={() => setDeleteCatConfirmId(cat.id)}>×</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              <label>Preço (R$)
+                <input type="number" placeholder="0.00" step="0.50" value={formPrice} onChange={e => setFormPrice(e.target.value)} />
+              </label>
+              <label>Estoque Atual
+                <input type="number" placeholder="Ex: 10" value={formStock} onChange={e => setFormStock(e.target.value)} />
+              </label>
+              <label>Descrição
+                <input type="text" placeholder="Descreva o produto" value={formDesc} onChange={e => setFormDesc(e.target.value)} />
+              </label>
+              <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
+                <button className="btn-orange" style={{ flex: 1 }} onClick={handleSaveProduct}>
+                  {editingId ? 'Salvar Alterações' : 'Adicionar Produto'}
+                </button>
+                {editingId && (
+                  <button className="btn-secondary" onClick={handleNewClick}>Cancelar</button>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      <AnimatePresence>
+        {deleteOrderConfirmId && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(0,0,0,0.5)', zIndex: 9999,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 20
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="card"
+              style={{ maxWidth: 400, width: '100%', textAlign: 'center' }}
+            >
+              <h3 style={{ marginBottom: 12, color: 'var(--danger)' }}>Excluir Pedido</h3>
+              <p style={{ marginBottom: 24, color: 'var(--muted)' }}>
+                Tem certeza que deseja excluir este pedido? <strong>Esta ação não poderá ser desfeita.</strong>
+              </p>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                <button className="btn-secondary" onClick={() => setDeleteOrderConfirmId(null)}>Cancelar</button>
+                <button className="btn-danger" onClick={() => handleDeleteOrder(deleteOrderConfirmId)}>Sim, Excluir</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {deleteConfirmId && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(0,0,0,0.5)', zIndex: 9999,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 20
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="card"
+              style={{ maxWidth: 400, width: '100%', textAlign: 'center' }}
+            >
+              <h3 style={{ marginBottom: 12, color: 'var(--danger)' }}>Atenção!</h3>
+              <p style={{ marginBottom: 24, color: 'var(--muted)' }}>
+                Tem certeza que deseja excluir este produto? <strong>Esta ação não poderá ser desfeita.</strong>
+              </p>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                <button className="btn-secondary" onClick={() => setDeleteConfirmId(null)}>Cancelar</button>
+                <button className="btn-danger" onClick={() => handleDelete(deleteConfirmId)}>Sim, Excluir</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {deleteCatConfirmId && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(0,0,0,0.5)', zIndex: 9999,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 20
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="card"
+              style={{ maxWidth: 400, width: '100%', textAlign: 'center' }}
+            >
+              <h3 style={{ marginBottom: 12, color: 'var(--danger)' }}>Excluir Categoria</h3>
+              <p style={{ marginBottom: 24, color: 'var(--muted)' }}>
+                Tem certeza que deseja excluir esta categoria? Os produtos associados a ela podem ficar sem categoria. <strong>Esta ação não poderá ser desfeita.</strong>
+              </p>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                <button className="btn-secondary" onClick={() => setDeleteCatConfirmId(null)}>Cancelar</button>
+                <button className="btn-danger" onClick={() => handleDeleteCategory(deleteCatConfirmId)}>Sim, Excluir</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </div>
+  );
+}
