@@ -59,7 +59,7 @@ type Category = {
   name: string;
 };
 
-type Screen = 'login' | 'login-gestor' | 'cadastro' | 'cantinas' | 'catalogo' | 'carrinho' | 'confirmacao' | 'status' | 'gestor' | 'meus-pedidos' | 'perfil';
+type Screen = 'login' | 'login-gestor' | 'cadastro' | 'esqueci-senha' | 'cantinas' | 'catalogo' | 'carrinho' | 'confirmacao' | 'status' | 'gestor' | 'meus-pedidos' | 'perfil';
 
 const playNotificationSound = () => {
   try {
@@ -97,7 +97,9 @@ function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: 
 
   useEffect(() => {
     if (currentUser?.id) {
-      fetch(`/api/orders/user/${currentUser.id}`)
+      fetch(`/api/orders/user/${currentUser.id}`, {
+        headers: { 'X-User-Id': currentUser.id.toString() }
+      })
         .then(res => res.json())
         .then(data => {
           if (Array.isArray(data)) {
@@ -110,6 +112,12 @@ function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: 
 
   const handleSave = async () => {
     if (!currentUser?.id) return;
+
+    const nameRegex = /^[A-Za-zÀ-ÖØ-öø-ÿ\s]+$/;
+    if (!nameRegex.test(name)) {
+      showToast('Erro: O nome de usuário não pode conter números ou caracteres especiais, apenas letras.');
+      return;
+    }
 
     if (isChangingPassword) {
       if (senha !== confirmaSenha) {
@@ -125,7 +133,10 @@ function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: 
     try {
       const res = await fetch(`/api/users/${currentUser.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-User-Id': currentUser.id.toString()
+        },
         body: JSON.stringify({ name, email, senha: isChangingPassword ? senha : '' })
       });
       const data = await res.json();
@@ -389,7 +400,7 @@ export default function App() {
     goTo('login');
   };
 
-  const authScreens = ['login', 'cadastro', 'login-gestor'];
+  const authScreens = ['login', 'cadastro', 'login-gestor', 'esqueci-senha'];
   const showNavbar = !authScreens.includes(currentScreen);
 
   const cartCount = cart.reduce((sum, item) => sum + item.qty, 0);
@@ -434,6 +445,7 @@ export default function App() {
           {currentScreen === 'login' && <ScreenLogin goTo={goTo} setCurrentUser={setCurrentUser} />}
           {currentScreen === 'login-gestor' && <ScreenLoginGestor goTo={goTo} setCurrentUser={setCurrentUser} />}
           {currentScreen === 'cadastro' && <ScreenCadastro goTo={goTo} />}
+          {currentScreen === 'esqueci-senha' && <ScreenEsqueciSenha goTo={goTo} />}
           {currentScreen === 'cantinas' && <ScreenCantinas goTo={goTo} canteens={canteens} setSelectedCanteen={setSelectedCanteen} />}
           {currentScreen === 'catalogo' && <ScreenCatalogo goTo={goTo} addToCart={addToCart} products={products} selectedCanteen={selectedCanteen} categories={categories} />}
           {currentScreen === 'carrinho' && <ScreenCarrinho goTo={goTo} cart={cart} changeQty={changeQty} clearCart={clearCart} finalizarPedido={finalizarPedido} />}
@@ -510,6 +522,12 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
     }
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      doLogin();
+    }
+  };
+
   return (
     <div className="auth-wrapper">
       <div className="auth-card">
@@ -517,10 +535,25 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
         <p className="auth-subtitle">Sistema de retirada de pedidos da cantina universitária</p>
         <div className="form">
           <label>E-mail institucional
-            <input type="email" placeholder="123456@facens.br" value={email} onChange={e => setEmail(e.target.value)} />
+            <input 
+              type="email" 
+              placeholder="123456@facens.br" 
+              value={email} 
+              onChange={e => setEmail(e.target.value)} 
+              onKeyDown={handleKeyDown}
+            />
           </label>
           <label>Senha
-            <input type="password" placeholder="••••••••" value={senha} onChange={e => setSenha(e.target.value)} />
+            <input 
+              type="password" 
+              placeholder="••••••••" 
+              value={senha} 
+              onChange={e => setSenha(e.target.value)} 
+              onKeyDown={handleKeyDown}
+            />
+            <div style={{ textAlign: 'right', marginTop: 4 }}>
+              <span style={{ fontSize: 12, color: 'var(--orange)', cursor: 'pointer' }} onClick={() => goTo('esqueci-senha')}>Esqueci minha senha</span>
+            </div>
           </label>
           <button className="btn-orange btn-full" onClick={doLogin} disabled={loading}>
             {loading ? 'Entrando...' : 'Entrar'}
@@ -540,6 +573,12 @@ function ScreenLoginGestor({ goTo, setCurrentUser }: { goTo: (s: Screen) => void
     goTo('gestor');
   };
 
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      doLoginGestor();
+    }
+  };
+
   return (
     <div className="auth-wrapper">
       <div className="auth-card">
@@ -548,10 +587,10 @@ function ScreenLoginGestor({ goTo, setCurrentUser }: { goTo: (s: Screen) => void
         <p className="auth-subtitle" style={{ marginTop: 8 }}>Acesse o painel de gerenciamento</p>
         <div className="form">
           <label>E-mail
-            <input type="email" placeholder="gestor@facens.br" defaultValue="carlos@facens.br" />
+            <input type="email" placeholder="gestor@facens.br" defaultValue="carlos@facens.br" onKeyDown={handleKeyDown} />
           </label>
           <label>Senha
-            <input type="password" placeholder="••••••••" defaultValue="123456" />
+            <input type="password" placeholder="••••••••" defaultValue="123456" onKeyDown={handleKeyDown} />
           </label>
           <button className="btn-orange btn-full" onClick={doLoginGestor}>Entrar como Gestor</button>
         </div>
@@ -566,13 +605,20 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
   const [confirmaSenha, setConfirmaSenha] = useState('');
+  const [code, setCode] = useState('');
+  const [step, setStep] = useState<'form' | 'verification'>('form');
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
 
-  const doCadastro = async () => {
+  const doRequestCode = async () => {
     if (!nome || !email || !senha || !confirmaSenha) {
       setError('Preencha todos os campos obrigatórios.');
+      return;
+    }
+    const nameRegex = /^[A-Za-zÀ-ÖØ-öø-ÿ\s]+$/;
+    if (!nameRegex.test(nome)) {
+      setError('O nome de usuário não pode conter números ou caracteres especiais, apenas letras.');
       return;
     }
     if (senha !== confirmaSenha) {
@@ -593,10 +639,39 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
     setError(null);
 
     try {
+      const res = await fetch('/api/request-code', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setStep('verification');
+        setError(null);
+      } else {
+        setError(data.error || 'Erro ao enviar código.');
+      }
+    } catch (err) {
+      setError('Erro de conexão com o servidor.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const doCadastro = async () => {
+    if (!code || code.length !== 6) {
+      setError('Digite o código de 6 dígitos.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
       const res = await fetch('/api/register', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: nome, email, senha })
+        body: JSON.stringify({ name: nome, email, senha, code })
       });
       
       const data = await res.json();
@@ -614,33 +689,224 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
     }
   };
 
+  const handleKeyDownForm = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      doRequestCode();
+    }
+  };
+
+  const handleKeyDownVerification = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      doCadastro();
+    }
+  };
+
   return (
     <div className="auth-wrapper">
       <div className="auth-card" style={{ maxWidth: 480 }}>
         <div className="auth-logo">🍽️ OrderPoint</div>
         <p className="auth-subtitle">Crie sua conta com e-mail institucional</p>
         <div className="form">
-          <label>Nome completo
-            <input type="text" placeholder="Seu nome" value={nome} onChange={e => setNome(e.target.value)} />
-          </label>
-          <label>E-mail institucional
-            <input type="email" placeholder="123456@facens.br" value={email} onChange={e => setEmail(e.target.value)} />
-          </label>
-          <label>Senha
-            <input type="password" placeholder="Mínimo 6 caracteres" value={senha} onChange={e => setSenha(e.target.value)} />
-          </label>
-          <label>Confirmar senha
-            <input type="password" placeholder="Repita a senha" value={confirmaSenha} onChange={e => setConfirmaSenha(e.target.value)} />
-          </label>
-          <button className="btn-orange btn-full" onClick={doCadastro} disabled={loading || success}>
-            {loading ? 'Criando conta...' : 'Criar conta'}
-          </button>
+          {step === 'form' ? (
+            <>
+              <label>Nome completo
+                <input type="text" placeholder="Seu nome" value={nome} onChange={e => setNome(e.target.value)} onKeyDown={handleKeyDownForm} />
+              </label>
+              <label>E-mail institucional
+                <input type="email" placeholder="123456@facens.br" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={handleKeyDownForm} />
+              </label>
+              <label>Senha
+                <input type="password" placeholder="Mínimo 6 caracteres" value={senha} onChange={e => setSenha(e.target.value)} onKeyDown={handleKeyDownForm} />
+              </label>
+              <label>Confirmar senha
+                <input type="password" placeholder="Repita a senha" value={confirmaSenha} onChange={e => setConfirmaSenha(e.target.value)} onKeyDown={handleKeyDownForm} />
+              </label>
+              <button className="btn-orange btn-full" onClick={doRequestCode} disabled={loading || success}>
+                {loading ? 'Enviando código...' : 'Continuar'}
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="alert alert-info" style={{ marginBottom: 16 }}>
+                Enviamos um código de 6 dígitos para <strong>{email}</strong>.
+              </div>
+              <label>Código de Verificação
+                <input 
+                  type="text" 
+                  placeholder="000000" 
+                  maxLength={6}
+                  value={code} 
+                  onChange={e => setCode(e.target.value.replace(/\D/g, ''))} 
+                  onKeyDown={handleKeyDownVerification}
+                  style={{ textAlign: 'center', fontSize: 24, letterSpacing: 8 }}
+                />
+              </label>
+              <button className="btn-orange btn-full" onClick={doCadastro} disabled={loading || success}>
+                {loading ? 'Verificando...' : 'Confirmar e Criar Conta'}
+              </button>
+              <button className="btn-outline btn-full" onClick={() => setStep('form')} disabled={loading || success}>
+                Voltar
+              </button>
+            </>
+          )}
         </div>
         <div className="auth-link">Já tem conta? <span onClick={() => goTo('login')}>Entrar</span></div>
         {error && <div className="alert alert-error">{error}</div>}
         {success && (
           <div className="alert alert-success">
             ✅ Conta criada! Redirecionando para o login...
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function ScreenEsqueciSenha({ goTo }: { goTo: (s: Screen) => void }) {
+  const [email, setEmail] = useState('');
+  const [code, setCode] = useState('');
+  const [novaSenha, setNovaSenha] = useState('');
+  const [confirmaSenha, setConfirmaSenha] = useState('');
+  const [step, setStep] = useState<'email' | 'verification'>('email');
+  const [error, setError] = useState<string | null>(null);
+  const [success, setSuccess] = useState(false);
+  const [loading, setLoading] = useState(false);
+
+  const doRequestCode = async () => {
+    if (!email) {
+      setError('Preencha o e-mail.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch('/api/reset-password-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setStep('verification');
+        setError(null);
+      } else {
+        setError(data.error || 'Erro ao enviar código.');
+      }
+    } catch (err) {
+      setError('Erro de conexão com o servidor.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const doResetPassword = async () => {
+    if (!code || code.length !== 6) {
+      setError('Digite o código de 6 dígitos.');
+      return;
+    }
+    if (!novaSenha || !confirmaSenha) {
+      setError('Preencha a nova senha.');
+      return;
+    }
+    if (novaSenha !== confirmaSenha) {
+      setError('As senhas não coincidem.');
+      return;
+    }
+    if (novaSenha.length < 6) {
+      setError('A senha deve ter no mínimo 6 caracteres.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+
+    try {
+      const res = await fetch('/api/reset-password', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, code, newPassword: novaSenha })
+      });
+      
+      const data = await res.json();
+      
+      if (res.ok && data.success) {
+        setSuccess(true);
+        setTimeout(() => goTo('login'), 2000);
+      } else {
+        setError(data.error || 'Erro ao redefinir senha.');
+      }
+    } catch (err) {
+      setError('Erro de conexão com o servidor.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleKeyDownEmail = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      doRequestCode();
+    }
+  };
+
+  const handleKeyDownReset = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') {
+      doResetPassword();
+    }
+  };
+
+  return (
+    <div className="auth-wrapper">
+      <div className="auth-card" style={{ maxWidth: 480 }}>
+        <div className="auth-logo">🍽️ OrderPoint</div>
+        <p className="auth-subtitle">Recuperação de Senha</p>
+        <div className="form">
+          {step === 'email' ? (
+            <>
+              <label>E-mail institucional
+                <input type="email" placeholder="123456@facens.br" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={handleKeyDownEmail} />
+              </label>
+              <button className="btn-orange btn-full" onClick={doRequestCode} disabled={loading || success}>
+                {loading ? 'Enviando código...' : 'Continuar'}
+              </button>
+            </>
+          ) : (
+            <>
+              <div className="alert alert-info" style={{ marginBottom: 16 }}>
+                Enviamos um código de 6 dígitos para <strong>{email}</strong>.
+              </div>
+              <label>Código de Verificação
+                <input 
+                  type="text" 
+                  placeholder="000000" 
+                  maxLength={6}
+                  value={code} 
+                  onChange={e => setCode(e.target.value.replace(/\D/g, ''))} 
+                  onKeyDown={handleKeyDownReset}
+                  style={{ textAlign: 'center', fontSize: 24, letterSpacing: 8 }}
+                />
+              </label>
+              <label>Nova Senha
+                <input type="password" placeholder="Mínimo 6 caracteres" value={novaSenha} onChange={e => setNovaSenha(e.target.value)} onKeyDown={handleKeyDownReset} />
+              </label>
+              <label>Confirmar Nova Senha
+                <input type="password" placeholder="Repita a nova senha" value={confirmaSenha} onChange={e => setConfirmaSenha(e.target.value)} onKeyDown={handleKeyDownReset} />
+              </label>
+              <button className="btn-orange btn-full" onClick={doResetPassword} disabled={loading || success}>
+                {loading ? 'Redefinindo...' : 'Redefinir Senha'}
+              </button>
+              <button className="btn-outline btn-full" onClick={() => setStep('email')} disabled={loading || success}>
+                Voltar
+              </button>
+            </>
+          )}
+        </div>
+        <div className="auth-link"><span onClick={() => goTo('login')}>← Voltar para o login</span></div>
+        {error && <div className="alert alert-error">{error}</div>}
+        {success && (
+          <div className="alert alert-success">
+            ✅ Senha redefinida! Redirecionando para o login...
           </div>
         )}
       </div>
@@ -1056,7 +1322,9 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
   const fetchMyOrders = async () => {
     if (!currentUser) return;
     try {
-      const res = await fetch(`/api/orders/user/${encodeURIComponent(currentUser.id)}`);
+      const res = await fetch(`/api/orders/user/${encodeURIComponent(currentUser.id)}`, {
+        headers: { 'X-User-Id': currentUser.id.toString() }
+      });
       if (res.ok) {
         const data = await res.json();
         
