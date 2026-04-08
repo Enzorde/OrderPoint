@@ -6,6 +6,39 @@ import path from "path";
 import { DatabaseSync } from "node:sqlite";
 import crypto from "crypto";
 import swaggerUi from "swagger-ui-express";
+import nodemailer from "nodemailer";
+
+let transporter: nodemailer.Transporter;
+async function initMailer() {
+  if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+    // Configuração real para Outlook / Office 365
+    transporter = nodemailer.createTransport({
+      host: "smtp.office365.com",
+      port: 587,
+      secure: false, // true for 465, false for other ports
+      requireTLS: true,
+      auth: {
+        user: process.env.SMTP_USER,
+        pass: process.env.SMTP_PASS,
+      },
+    });
+    console.log("Real Outlook SMTP initialized.");
+  } else {
+    // Fallback para Ethereal (Testes)
+    const testAccount = await nodemailer.createTestAccount();
+    transporter = nodemailer.createTransport({
+      host: "smtp.ethereal.email",
+      port: 587,
+      secure: false,
+      auth: {
+        user: testAccount.user,
+        pass: testAccount.pass,
+      },
+    });
+    console.log("Ethereal Email initialized (Fallback de testes).");
+  }
+}
+initMailer();
 
 const swaggerDocument = {
   openapi: '3.0.0',
@@ -126,6 +159,14 @@ class DatabaseManager {
         matricula TEXT,
         senha TEXT NOT NULL,
         role TEXT NOT NULL DEFAULT 'student'
+      )
+    `);
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS verification_codes (
+        email TEXT PRIMARY KEY,
+        code TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
       )
     `);
 
@@ -263,12 +304,88 @@ class UserController extends BaseController {
     this.app.post("/usuarios", this.register.bind(this)); // Alias for swagger
     this.app.post("/api/login", this.login.bind(this));
     this.app.put("/api/users/:id", this.updateProfile.bind(this));
+    this.app.post("/api/request-code", this.requestCode.bind(this));
+    this.app.post("/api/reset-password-request", this.resetPasswordRequest.bind(this));
+    this.app.post("/api/reset-password", this.resetPassword.bind(this));
   }
 
-  private register(req: Request, res: Response) {
-    const { name, email, senha } = req.body;
-    if (!name || !email || !senha) {
-      return res.status(400).json({ error: "Nome, e-mail e senha são obrigatórios." });
+  private async resetPasswordRequest(req: Request, res: Response) {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: "E-mail é obrigatório." });
+    }
+
+    const existingUser = this.db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    if (!existingUser) {
+      return res.status(404).json({ error: "Usuário não encontrado." });
+    }
+
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO verification_codes (email, code, expires_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET code = excluded.code, expires_at = excluded.expires_at
+      `);
+      stmt.run(email, code, expiresAt);
+
+      if (transporter) {
+        const fromAddress = process.env.SMTP_USER ? `"Cantina OrderPoint" <${process.env.SMTP_USER}>` : '"Cantina OrderPoint" <noreply@orderpoint.com>';
+        const info = await transporter.sendMail({
+          from: fromAddress,
+          to: email,
+          subject: "Recuperação de Senha",
+          text: `Seu código para redefinir a senha é: ${code}`,
+          html: `<b>Seu código para redefinir a senha é: ${code}</b>`
+        });
+        
+        if (!process.env.SMTP_USER) {
+          console.log("Email sent! Preview URL: %s", nodemailer.getTestMessageUrl(info));
+        } else {
+          console.log(`Real email sent to ${email}`);
+        }
+      }
+
+      res.json({ success: true, message: "Código enviado com sucesso." });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao gerar código." });
+    }
+  }
+
+  private resetPassword(req: Request, res: Response) {
+    const { email, code, newPassword } = req.body;
+    
+    if (!email || !code || !newPassword) {
+      return res.status(400).json({ error: "E-mail, código e nova senha são obrigatórios." });
+    }
+
+    const record = this.db.prepare('SELECT * FROM verification_codes WHERE email = ?').get(email) as any;
+    if (!record) return res.status(400).json({ error: "Nenhum código solicitado para este e-mail." });
+    if (record.code !== code) return res.status(400).json({ error: "Código inválido." });
+    if (Date.now() > record.expires_at) return res.status(400).json({ error: "Código expirado." });
+
+    const hashedSenha = hashPassword(newPassword);
+
+    try {
+      const update = this.db.prepare('UPDATE users SET senha = ? WHERE email = ?');
+      update.run(hashedSenha, email);
+      
+      this.db.prepare('DELETE FROM verification_codes WHERE email = ?').run(email);
+      
+      res.json({ success: true, message: "Senha redefinida com sucesso." });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao redefinir senha." });
+    }
+  }
+
+  private async requestCode(req: Request, res: Response) {
+    const { email } = req.body;
+    
+    if (!email) {
+      return res.status(400).json({ error: "E-mail é obrigatório." });
     }
 
     const emailRegex = /^\d{6}@facens\.br$/;
@@ -276,12 +393,75 @@ class UserController extends BaseController {
       return res.status(400).json({ error: "O e-mail deve ser institucional (@facens.br) e conter exatamente 6 dígitos numéricos antes do @ (seu RA)." });
     }
 
+    const existingUser = this.db.prepare('SELECT id FROM users WHERE email = ?').get(email);
+    if (existingUser) {
+      return res.status(400).json({ error: "E-mail já cadastrado." });
+    }
+
+    const code = crypto.randomInt(100000, 1000000).toString();
+    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
+
+    try {
+      const stmt = this.db.prepare(`
+        INSERT INTO verification_codes (email, code, expires_at)
+        VALUES (?, ?, ?)
+        ON CONFLICT(email) DO UPDATE SET code = excluded.code, expires_at = excluded.expires_at
+      `);
+      stmt.run(email, code, expiresAt);
+
+      if (transporter) {
+        const fromAddress = process.env.SMTP_USER ? `"Cantina OrderPoint" <${process.env.SMTP_USER}>` : '"Cantina OrderPoint" <noreply@orderpoint.com>';
+        const info = await transporter.sendMail({
+          from: fromAddress,
+          to: email,
+          subject: "Seu código de verificação",
+          text: `Seu código de verificação é: ${code}`,
+          html: `<b>Seu código de verificação é: ${code}</b>`
+        });
+        
+        if (!process.env.SMTP_USER) {
+          console.log("Email sent! Preview URL: %s", nodemailer.getTestMessageUrl(info));
+        } else {
+          console.log(`Real email sent to ${email}`);
+        }
+      }
+
+      res.json({ success: true, message: "Código enviado com sucesso." });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao gerar código." });
+    }
+  }
+
+  private register(req: Request, res: Response) {
+    const { name, email, senha, code } = req.body;
+    if (!name || !email || !senha || !code) {
+      return res.status(400).json({ error: "Nome, e-mail, senha e código são obrigatórios." });
+    }
+
+    const nameRegex = /^[A-Za-zÀ-ÖØ-öø-ÿ\s]+$/;
+    if (!nameRegex.test(name)) {
+      return res.status(400).json({ error: "O nome de usuário não pode conter números ou caracteres especiais, apenas letras." });
+    }
+
+    const emailRegex = /^\d{6}@facens\.br$/;
+    if (!emailRegex.test(email)) {
+      return res.status(400).json({ error: "O e-mail deve ser institucional (@facens.br) e conter exatamente 6 dígitos numéricos antes do @ (seu RA)." });
+    }
+
+    const record = this.db.prepare('SELECT * FROM verification_codes WHERE email = ?').get(email) as any;
+    if (!record) return res.status(400).json({ error: "Nenhum código solicitado para este e-mail." });
+    if (record.code !== code) return res.status(400).json({ error: "Código inválido." });
+    if (Date.now() > record.expires_at) return res.status(400).json({ error: "Código expirado." });
+
     const matricula = email.split('@')[0];
     const hashedSenha = hashPassword(senha);
 
     try {
       const insert = this.db.prepare('INSERT INTO users (name, email, matricula, senha, role) VALUES (?, ?, ?, ?, ?)');
       const result = insert.run(name, email, matricula, hashedSenha, 'student');
+      
+      this.db.prepare('DELETE FROM verification_codes WHERE email = ?').run(email);
+      
       res.status(201).json({ success: true, userId: result.lastInsertRowid });
     } catch (error: any) {
       if (error.message && error.message.includes("UNIQUE constraint failed")) {
@@ -327,6 +507,18 @@ class UserController extends BaseController {
     const { name, email, senha } = req.body;
     const matricula = email.endsWith('@facens.br') ? email.replace('@facens.br', '') : '';
     
+    const userIdHeader = req.headers['x-user-id'];
+    if (!userIdHeader || userIdHeader !== req.params.id) {
+      return res.status(403).json({ error: "Acesso negado. Você só pode atualizar seu próprio perfil." });
+    }
+
+    if (name) {
+      const nameRegex = /^[A-Za-zÀ-ÖØ-öø-ÿ\s]+$/;
+      if (!nameRegex.test(name)) {
+        return res.status(400).json({ error: "O nome de usuário não pode conter números ou caracteres especiais, apenas letras." });
+      }
+    }
+
     try {
       if (senha) {
         const hashedSenha = hashPassword(senha);
@@ -366,7 +558,7 @@ class ProductController extends BaseController {
     try {
       let products;
       if (categoria) {
-        products = this.db.prepare('SELECT * FROM products WHERE active = 1 AND cat = ?').all(categoria);
+        products = this.db.prepare('SELECT * FROM products WHERE active = 1 AND cat = ?').all(categoria as string);
       } else {
         products = this.db.prepare('SELECT * FROM products WHERE active = 1').all();
       }
@@ -656,6 +848,11 @@ class OrderController extends BaseController {
   }
 
   private getByUserId(req: Request, res: Response) {
+    const userIdHeader = req.headers['x-user-id'];
+    if (!userIdHeader || userIdHeader !== req.params.id) {
+      return res.status(403).json({ error: "Acesso negado. Você só pode ver seus próprios pedidos." });
+    }
+
     try {
       const orders = this.db.prepare(`
         SELECT o.*, r.score as rating 
