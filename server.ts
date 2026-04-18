@@ -11,11 +11,10 @@ import nodemailer from "nodemailer";
 let transporter: nodemailer.Transporter;
 async function initMailer() {
   if (process.env.SMTP_USER && process.env.SMTP_PASS) {
-    // Configuração real para Outlook / Office 365
     transporter = nodemailer.createTransport({
       host: "smtp.office365.com",
       port: 587,
-      secure: false, // true for 465, false for other ports
+      secure: false, 
       requireTLS: true,
       auth: {
         user: process.env.SMTP_USER,
@@ -24,7 +23,6 @@ async function initMailer() {
     });
     console.log("Real Outlook SMTP initialized.");
   } else {
-    // Fallback para Ethereal (Testes)
     const testAccount = await nodemailer.createTestAccount();
     transporter = nodemailer.createTransport({
       host: "smtp.ethereal.email",
@@ -228,11 +226,12 @@ class DatabaseManager {
       CREATE TABLE IF NOT EXISTS ratings (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         order_id INTEGER UNIQUE NOT NULL,
-        canteen_id INTEGER NOT NULL,
+        canteen_id INTEGER NOT NULL DEFAULT 1,
         score INTEGER NOT NULL,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    try { this.db.exec("ALTER TABLE ratings ADD COLUMN canteen_id INTEGER NOT NULL DEFAULT 1"); } catch (e) {}
 
     // Categories
     this.db.exec(`
@@ -244,6 +243,13 @@ class DatabaseManager {
   }
 
   private seedData() {
+    // Seed Mock User
+    const userCount = this.db.prepare('SELECT COUNT(*) as count FROM users WHERE email = ?').get('admin@facens.br') as any;
+    if (userCount.count === 0) {
+      const insertUser = this.db.prepare('INSERT INTO users (name, email, matricula, senha, role) VALUES (?, ?, ?, ?, ?)');
+      insertUser.run('Admin Teste', 'admin@facens.br', 'admin', hashPassword('224641'), 'student');
+    }
+
     // Seed Canteens
     const canteensCount = this.db.prepare('SELECT COUNT(*) as count FROM canteens').get() as any;
     if (canteensCount.count === 0) {
@@ -730,15 +736,38 @@ class RatingController extends BaseController {
 
   private create(req: Request, res: Response) {
     const { order_id, canteen_id, score } = req.body;
-    if (!order_id || !canteen_id || !score) return res.status(400).json({ error: "Dados incompletos." });
+    if (!order_id || !score) return res.status(400).json({ error: "Dados incompletos." });
+    
+    const userIdHeader = req.headers['x-user-id'];
+    if (!userIdHeader) {
+      return res.status(401).json({ error: "Não autorizado." });
+    }
+
+    // Verify if the order belongs to the user
+    const order = this.db.prepare('SELECT user_id, user_name FROM orders WHERE id = ?').get(order_id) as any;
+    const user = this.db.prepare('SELECT name FROM users WHERE id = ?').get(userIdHeader as string) as any;
+    
+    if (!order || !user) {
+      return res.status(403).json({ error: "Pedido ou usuário não encontrado." });
+    }
+
+    const isOwner = order.user_id?.toString() === userIdHeader || (order.user_id === null && order.user_name === user.name);
+    
+    if (!isOwner) {
+      return res.status(403).json({ error: "Você só pode avaliar seus próprios pedidos." });
+    }
+
+    const finalCanteenId = canteen_id || 1; // Fallback to 1 if undefined
+
     try {
       const insert = this.db.prepare('INSERT INTO ratings (order_id, canteen_id, score) VALUES (?, ?, ?)');
-      insert.run(order_id, canteen_id, score);
+      insert.run(order_id, finalCanteenId, score);
       res.status(201).json({ success: true });
     } catch (error: any) {
       if (error.message && error.message.includes("UNIQUE constraint failed")) {
         res.status(400).json({ error: "Pedido já avaliado." });
       } else {
+        console.error("Erro ao salvar avaliação:", error);
         res.status(500).json({ error: "Erro ao salvar avaliação." });
       }
     }
@@ -956,7 +985,6 @@ class AppServer {
   }
 
   public async start(port: number) {
-    // Vite middleware for development
     if (process.env.NODE_ENV !== "production") {
       const vite = await createViteServer({
         server: { middlewareMode: true },
