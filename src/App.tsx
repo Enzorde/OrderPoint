@@ -61,6 +61,128 @@ type Category = {
 
 type Screen = 'login' | 'login-gestor' | 'cadastro' | 'esqueci-senha' | 'cantinas' | 'catalogo' | 'carrinho' | 'confirmacao' | 'status' | 'gestor' | 'meus-pedidos' | 'perfil';
 
+// --- Padrão de Projeto: STRATEGY (Conforme PDF) ---
+interface GestorCallbacks {
+  updateOrderStatus: (id: number, status: string) => void;
+  setDeleteOrderConfirmId: (id: number) => void;
+}
+
+interface Padrao_StatusPedido {
+  mostrarTexto(): string;
+  mostrarCor(): { background?: string; color?: string; className?: string };
+  renderGestorActions(orderId: number, callbacks: GestorCallbacks): React.ReactNode;
+}
+
+class Status_Aguardando implements Padrao_StatusPedido {
+  mostrarTexto() { return '⏳ Aguardando Cantina'; }
+  mostrarCor() { return { background: '#f0f7ff', color: 'var(--primary)' }; }
+  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
+    return (
+      <React.Fragment>
+        <span className="tag" style={{ background: '#f0f7ff', color: 'var(--primary)' }}>Aguardando</span>
+        <div className="order-actions">
+          <button className="btn-orange btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'preparo')}>Aceitar</button>
+          <button className="btn-danger btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'cancelado')}>Recusar</button>
+        </div>
+      </React.Fragment>
+    );
+  }
+}
+
+class Status_Preparo implements Padrao_StatusPedido {
+  mostrarTexto() { return '👨‍🍳 Em Preparo'; }
+  mostrarCor() { return { background: '#fff4e6', color: 'var(--orange)' }; }
+  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
+    return (
+      <React.Fragment>
+        <span className="tag tag-orange">Em Preparo</span>
+        <div className="order-actions">
+          <button className="btn-success btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'pronto')}>Pronto!</button>
+          <button className="btn-danger btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'cancelado')}>Cancelar</button>
+        </div>
+      </React.Fragment>
+    );
+  }
+}
+
+class Status_Pronto implements Padrao_StatusPedido {
+  mostrarTexto() { return '🔔 Pronto para Retirada'; }
+  mostrarCor() { return { background: '#e6f4ea', color: 'var(--success)' }; }
+  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
+    return (
+      <React.Fragment>
+        <span className="tag tag-success">Pronto para Retirada</span>
+        <div className="order-actions">
+          <button className="btn-success btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'retirado')}>Marcar como Retirado</button>
+        </div>
+      </React.Fragment>
+    );
+  }
+}
+
+class Status_Retirado implements Padrao_StatusPedido {
+  mostrarTexto() { return '✅ Retirado'; }
+  mostrarCor() { return { background: '#f1f3f4', color: 'var(--muted)' }; }
+  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
+    return (
+      <React.Fragment>
+        <span className="tag" style={{ background: '#f3f4f6', color: '#4b5563' }}>Retirado</span>
+        <div className="order-actions">
+          <button className="btn-danger btn-sm" onClick={() => callbacks.setDeleteOrderConfirmId(orderId)}>Excluir</button>
+        </div>
+      </React.Fragment>
+    );
+  }
+}
+
+class Status_Cancelado implements Padrao_StatusPedido {
+  mostrarTexto() { return '❌ Cancelado'; }
+  mostrarCor() { return { background: '#fce8e6', color: 'var(--danger)' }; }
+  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
+    return (
+      <React.Fragment>
+        <span className="tag tag-danger">Cancelado</span>
+        <div className="order-actions">
+          <button className="btn-danger btn-sm" onClick={() => callbacks.setDeleteOrderConfirmId(orderId)}>Excluir</button>
+        </div>
+      </React.Fragment>
+    );
+  }
+}
+
+class Status_Outro implements Padrao_StatusPedido {
+  constructor(private status: string) {}
+  mostrarTexto() { return this.status; }
+  mostrarCor() { return {}; }
+  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
+    return <React.Fragment></React.Fragment>;
+  }
+}
+
+class StatusPedidoContexto {
+  private m_Padrao_Status: Padrao_StatusPedido;
+
+  constructor(status: string) {
+    switch(status) {
+      case 'aguardando': this.m_Padrao_Status = new Status_Aguardando(); break;
+      case 'preparo': this.m_Padrao_Status = new Status_Preparo(); break;
+      case 'pronto': this.m_Padrao_Status = new Status_Pronto(); break;
+      case 'retirado': this.m_Padrao_Status = new Status_Retirado(); break;
+      case 'cancelado': this.m_Padrao_Status = new Status_Cancelado(); break;
+      default: this.m_Padrao_Status = new Status_Outro(status); break;
+    }
+  }
+
+  set_Padrao_Status(novoStatus: Padrao_StatusPedido) {
+    this.m_Padrao_Status = novoStatus;
+  }
+
+  comportamento_mostrarTexto() { return this.m_Padrao_Status.mostrarTexto(); }
+  comportamento_mostrarCor() { return this.m_Padrao_Status.mostrarCor(); }
+  comportamento_renderGestorActions(orderId: number, callbacks: GestorCallbacks) { return this.m_Padrao_Status.renderGestorActions(orderId, callbacks); }
+}
+// --- Fim Padrão Strategy ---
+
 const playNotificationSound = () => {
   try {
     const ctx = new (window.AudioContext || (window as any).webkitAudioContext)();
@@ -292,6 +414,7 @@ export default function App() {
     // Polling para manter o catálogo e estoque atualizados em tempo real
     const interval = setInterval(() => {
       fetchProducts();
+      fetchCanteens();
     }, 5000);
     
     return () => clearInterval(interval);
@@ -299,7 +422,7 @@ export default function App() {
 
   const fetchCanteens = async () => {
     try {
-      const res = await fetch('/api/canteens');
+      const res = await fetch('/api/canteens', { cache: 'no-store' });
       const data = await res.json();
       setCanteens(data);
     } catch (err) {
@@ -1323,7 +1446,8 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
     if (!currentUser) return;
     try {
       const res = await fetch(`/api/orders/user/${encodeURIComponent(currentUser.id)}`, {
-        headers: { 'X-User-Id': currentUser.id.toString() }
+        headers: { 'X-User-Id': currentUser.id.toString() },
+        cache: 'no-store'
       });
       if (res.ok) {
         const data = await res.json();
@@ -1353,10 +1477,14 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
   }, [currentUser]);
 
   const handleRate = async (orderId: number, canteenId: number, score: number) => {
+    if (!currentUser) return;
     try {
       const res = await fetch('/api/ratings', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'X-User-Id': currentUser.id.toString()
+        },
         body: JSON.stringify({ order_id: orderId, canteen_id: canteenId, score })
       });
       if (res.ok) {
@@ -1372,25 +1500,11 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
   };
 
   const getStatusText = (status: string) => {
-    switch(status) {
-      case 'aguardando': return '⏳ Aguardando Cantina';
-      case 'preparo': return '👨‍🍳 Em Preparo';
-      case 'pronto': return '🔔 Pronto para Retirada';
-      case 'retirado': return '✅ Retirado';
-      case 'cancelado': return '❌ Cancelado';
-      default: return status;
-    }
+    return new StatusPedidoContexto(status).comportamento_mostrarTexto();
   };
 
   const getStatusColor = (status: string) => {
-    switch(status) {
-      case 'aguardando': return { background: '#f0f7ff', color: 'var(--primary)' };
-      case 'preparo': return { background: '#fff4e6', color: 'var(--orange)' };
-      case 'pronto': return { background: '#e6f4ea', color: 'var(--success)' };
-      case 'retirado': return { background: '#f1f3f4', color: 'var(--muted)' };
-      case 'cancelado': return { background: '#fce8e6', color: 'var(--danger)' };
-      default: return {};
-    }
+    return new StatusPedidoContexto(status).comportamento_mostrarCor();
   };
 
   return (
@@ -1482,7 +1596,7 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
   const [orderFilter, setOrderFilter] = useState<string>('todos');
   
   // Settings state
-  const myCanteen = canteens[0] || null; // Assume gestor manages the first canteen
+  const myCanteen = canteens[0] || null; 
   const [canteenName, setCanteenName] = useState(myCanteen?.name || '');
   const [canteenDesc, setCanteenDesc] = useState(myCanteen?.desc || '');
   const [canteenLocation, setCanteenLocation] = useState(myCanteen?.location || '');
@@ -1803,8 +1917,6 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
             <button className={`btn-sm ${orderFilter === 'aguardando' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('aguardando')}>Aguardando</button>
             <button className={`btn-sm ${orderFilter === 'preparo' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('preparo')}>Em Preparo</button>
             <button className={`btn-sm ${orderFilter === 'pronto' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('pronto')}>Pronto</button>
-            <button className={`btn-sm ${orderFilter === 'retirado' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('retirado')}>Retirado</button>
-            <button className={`btn-sm ${orderFilter === 'cancelado' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('cancelado')}>Cancelado</button>
           </div>
           <div className="orders-list">
             {orders.length === 0 ? (
@@ -1827,48 +1939,10 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
                         <div className="order-meta">{order.user_name} · {itemsText} · R$ {order.total.toFixed(2).replace('.', ',')}</div>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                        {order.status === 'aguardando' && (
-                          <>
-                            <span className="tag" style={{ background: '#f0f7ff', color: 'var(--primary)' }}>Aguardando</span>
-                            <div className="order-actions">
-                              <button className="btn-orange btn-sm" onClick={() => updateOrderStatus(order.id, 'preparo')}>Aceitar</button>
-                              <button className="btn-danger btn-sm" onClick={() => updateOrderStatus(order.id, 'cancelado')}>Recusar</button>
-                            </div>
-                          </>
-                        )}
-                        {order.status === 'preparo' && (
-                          <>
-                            <span className="tag tag-orange">Em Preparo</span>
-                            <div className="order-actions">
-                              <button className="btn-success btn-sm" onClick={() => updateOrderStatus(order.id, 'pronto')}>Pronto!</button>
-                              <button className="btn-danger btn-sm" onClick={() => updateOrderStatus(order.id, 'cancelado')}>Cancelar</button>
-                            </div>
-                          </>
-                        )}
-                        {order.status === 'pronto' && (
-                          <>
-                            <span className="tag tag-success">Pronto para Retirada</span>
-                            <div className="order-actions">
-                              <button className="btn-success btn-sm" onClick={() => updateOrderStatus(order.id, 'retirado')}>Marcar como Retirado</button>
-                            </div>
-                          </>
-                        )}
-                        {order.status === 'retirado' && (
-                          <>
-                            <span className="tag" style={{ background: '#f3f4f6', color: '#4b5563' }}>Retirado</span>
-                            <div className="order-actions">
-                              <button className="btn-danger btn-sm" onClick={() => setDeleteOrderConfirmId(order.id)}>Excluir</button>
-                            </div>
-                          </>
-                        )}
-                        {order.status === 'cancelado' && (
-                          <>
-                            <span className="tag tag-danger">Cancelado</span>
-                            <div className="order-actions">
-                              <button className="btn-danger btn-sm" onClick={() => setDeleteOrderConfirmId(order.id)}>Excluir</button>
-                            </div>
-                          </>
-                        )}
+                        {new StatusPedidoContexto(order.status).comportamento_renderGestorActions(order.id, {
+                          updateOrderStatus,
+                          setDeleteOrderConfirmId
+                        })}
                       </div>
                     </div>
                   );
