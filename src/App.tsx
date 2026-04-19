@@ -1058,7 +1058,6 @@ function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Scre
   return (
     <div className="page">
       <div className="hero">
-        <div className="tag tag-orange">RF2 — Menus Interativos</div>
         <h1>Escolha uma Cantina 🏪</h1>
         <p>Selecione a cantina onde deseja fazer seu pedido</p>
       </div>
