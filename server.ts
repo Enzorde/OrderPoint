@@ -414,16 +414,34 @@ class UserController extends BaseController {
         ON CONFLICT(email) DO UPDATE SET code = excluded.code, expires_at = excluded.expires_at
       `);
       stmt.run(email, code, expiresAt);
-
+      
       if (transporter) {
         const fromAddress = process.env.SMTP_USER ? `"Cantina OrderPoint" <${process.env.SMTP_USER}>` : '"Cantina OrderPoint" <noreply@orderpoint.com>';
         const info = await transporter.sendMail({
           from: fromAddress,
           to: email,
-          subject: "Seu código de verificação",
+          subject: "Cantina OrderPoint - Código de Verificação",
           text: `Seu código de verificação é: ${code}`,
-          html: `<b>Seu código de verificação é: ${code}</b>`
-        });
+          html: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #f9fafb; padding: 20px; border-radius: 8px;">
+  <div style="text-align: center; margin-bottom: 20px;">
+    <h1 style="color: #ea580c; margin: 0; font-size: 28px;">Cantina OrderPoint 🍕</h1>
+  </div>
+  <div style="background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+    <h2 style="color: #1f2937; margin-top: 0; text-align: center;">Confirme seu E-mail</h2>
+    <p style="color: #4b5563; font-size: 16px; line-height: 1.5; text-align: center;">
+      Falta pouco para você fazer o seu primeiro pedido! Use o código de verificação abaixo para criar a sua conta na cantina:
+    </p>
+    <div style="background-color: #f3f4f6; border-radius: 8px; padding: 20px; margin: 30px 0; text-align: center;">
+      <span style="font-size: 32px; font-weight: bold; color: #ea580c; letter-spacing: 4px;">${code}</span>
+    </div>
+    <p style="color: #6b7280; font-size: 14px; text-align: center;">
+      Este código é válido por 10 minutos. Aproveite nossos lanches!
+    </p>
+  </div>
+  <div style="text-align: center; margin-top: 20px;">
+    <p style="color: #9ca3af; font-size: 12px;">© ${new Date().getFullYear()} Cantina OrderPoint. Todos os direitos reservados.</p>
+  </div>
+</div>`
         
         if (!process.env.SMTP_USER) {
           console.log("Email sent! Preview URL: %s", nodemailer.getTestMessageUrl(info));
