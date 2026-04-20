@@ -11,10 +11,11 @@ import nodemailer from "nodemailer";
 let transporter: nodemailer.Transporter;
 async function initMailer() {
   if (process.env.SMTP_USER && process.env.SMTP_PASS) {
+    // Configuração real para Outlook / Office 365
     transporter = nodemailer.createTransport({
       host: "smtp.office365.com",
       port: 587,
-      secure: false, 
+      secure: false, // true for 465, false for other ports
       requireTLS: true,
       auth: {
         user: process.env.SMTP_USER,
@@ -23,6 +24,7 @@ async function initMailer() {
     });
     console.log("Real Outlook SMTP initialized.");
   } else {
+    // Fallback para Ethereal (Testes)
     const testAccount = await nodemailer.createTestAccount();
     transporter = nodemailer.createTransport({
       host: "smtp.ethereal.email",
@@ -343,9 +345,28 @@ class UserController extends BaseController {
         const info = await transporter.sendMail({
           from: fromAddress,
           to: email,
-          subject: "Recuperação de Senha",
+          subject: "Cantina OrderPoint - Recuperação de Senha",
           text: `Seu código para redefinir a senha é: ${code}`,
-          html: `<b>Seu código para redefinir a senha é: ${code}</b>`
+          html: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #f9fafb; padding: 20px; border-radius: 8px;">
+  <div style="text-align: center; margin-bottom: 20px;">
+    <h1 style="color: #ea580c; margin: 0; font-size: 28px;">Cantina OrderPoint 🍔</h1>
+  </div>
+  <div style="background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
+    <h2 style="color: #1f2937; margin-top: 0; text-align: center;">Recuperação de Senha</h2>
+    <p style="color: #4b5563; font-size: 16px; line-height: 1.5; text-align: center;">
+      Recebemos um pedido para redefinir a sua senha. Utilize o código de 6 dígitos abaixo para concluir o processo:
+    </p>
+    <div style="background-color: #f3f4f6; border-radius: 8px; padding: 20px; margin: 30px 0; text-align: center;">
+      <span style="font-size: 32px; font-weight: bold; color: #ea580c; letter-spacing: 4px;">${code}</span>
+    </div>
+    <p style="color: #6b7280; font-size: 14px; text-align: center;">
+      ⚠️ <b>Aviso:</b> Se você não solicitou a troca de senha, por favor ignore este email. Nenhuma alteração será feita na sua conta.
+    </p>
+  </div>
+  <div style="text-align: center; margin-top: 20px;">
+    <p style="color: #9ca3af; font-size: 12px;">© ${new Date().getFullYear()} Cantina OrderPoint. Todos os direitos reservados.</p>
+  </div>
+</div>`
         });
         
         if (!process.env.SMTP_USER) {
@@ -374,6 +395,11 @@ class UserController extends BaseController {
     if (Date.now() > record.expires_at) return res.status(400).json({ error: "Código expirado." });
 
     const hashedSenha = hashPassword(newPassword);
+
+    const currentUser = this.db.prepare('SELECT senha FROM users WHERE email = ?').get(email) as any;
+    if (currentUser && currentUser.senha === hashedSenha) {
+      return res.status(400).json({ error: "A nova senha deve ser diferente da atual." });
+    }
 
     try {
       const update = this.db.prepare('UPDATE users SET senha = ? WHERE email = ?');
@@ -414,7 +440,7 @@ class UserController extends BaseController {
         ON CONFLICT(email) DO UPDATE SET code = excluded.code, expires_at = excluded.expires_at
       `);
       stmt.run(email, code, expiresAt);
-      
+
       if (transporter) {
         const fromAddress = process.env.SMTP_USER ? `"Cantina OrderPoint" <${process.env.SMTP_USER}>` : '"Cantina OrderPoint" <noreply@orderpoint.com>';
         const info = await transporter.sendMail({
@@ -442,6 +468,7 @@ class UserController extends BaseController {
     <p style="color: #9ca3af; font-size: 12px;">© ${new Date().getFullYear()} Cantina OrderPoint. Todos os direitos reservados.</p>
   </div>
 </div>`
+        });
         
         if (!process.env.SMTP_USER) {
           console.log("Email sent! Preview URL: %s", nodemailer.getTestMessageUrl(info));
@@ -546,6 +573,12 @@ class UserController extends BaseController {
     try {
       if (senha) {
         const hashedSenha = hashPassword(senha);
+        
+        const currentUser = this.db.prepare('SELECT senha FROM users WHERE id = ?').get(req.params.id) as any;
+        if (currentUser && currentUser.senha === hashedSenha) {
+          return res.status(400).json({ error: "A nova senha deve ser diferente da atual." });
+        }
+
         const update = this.db.prepare('UPDATE users SET name=?, email=?, matricula=?, senha=? WHERE id=?');
         update.run(name, email, matricula, hashedSenha, req.params.id);
       } else {
@@ -1003,6 +1036,7 @@ class AppServer {
   }
 
   public async start(port: number) {
+    // Vite middleware for development
     if (process.env.NODE_ENV !== "production") {
       const vite = await createViteServer({
         server: { middlewareMode: true },
