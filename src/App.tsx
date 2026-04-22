@@ -8,6 +8,8 @@ type User = {
   email?: string;
   matricula?: string;
   role: 'student' | 'manager';
+  points?: number;
+  canteen_id?: number;
 };
 
 type Product = {
@@ -19,6 +21,8 @@ type Product = {
   cat: string;
   active: number;
   stock: number;
+  points_price?: number;
+  canteen_id?: number;
 };
 
 type CartItem = {
@@ -59,7 +63,7 @@ type Category = {
   name: string;
 };
 
-type Screen = 'login' | 'login-gestor' | 'cadastro' | 'esqueci-senha' | 'cantinas' | 'catalogo' | 'carrinho' | 'confirmacao' | 'status' | 'gestor' | 'meus-pedidos' | 'perfil';
+type Screen = 'login' | 'login-gestor' | 'cadastro' | 'esqueci-senha' | 'cantinas' | 'catalogo' | 'carrinho' | 'confirmacao' | 'status' | 'gestor' | 'meus-pedidos' | 'perfil' | 'pontos';
 
 // --- Padrão de Projeto: STRATEGY (Conforme PDF) ---
 interface GestorCallbacks {
@@ -206,6 +210,122 @@ const playNotificationSound = () => {
     console.error("Audio play failed", e);
   }
 };
+
+function ScreenPontos({ goTo, products, canteens, currentUser, setCurrentUser, showToast, addToCart }: { goTo: (s: Screen) => void, products: Product[], canteens: Canteen[], currentUser: User | null, setCurrentUser: (u: User) => void, showToast: (msg: string) => void, addToCart: (p: Product) => void }) {
+  const points = currentUser?.points || 0;
+  const redeemableProducts = products.filter(p => p.points_price && p.points_price > 0 && p.active === 1);
+
+  // Group by Canteen
+  const groupedProducts: Record<number, Product[]> = {};
+  redeemableProducts.forEach(p => {
+    const cid = p.canteen_id || 1;
+    if (!groupedProducts[cid]) groupedProducts[cid] = [];
+    groupedProducts[cid].push(p);
+  });
+
+  useEffect(() => {
+    if (currentUser?.id) {
+      fetch(`/api/users/${currentUser.id}`, { headers: { 'X-User-Id': currentUser.id.toString() } })
+        .then(res => res.json())
+        .then(data => {
+          if (data.success && data.user) {
+            setCurrentUser(data.user);
+          }
+        })
+        .catch(() => {});
+    }
+  }, [currentUser?.id, setCurrentUser]);
+
+  const handleRedeem = async (product: Product) => {
+    if (!currentUser?.id) return;
+    if (points < (product.points_price || 0)) {
+      showToast('⚠️ Pontos insuficientes!');
+      return;
+    }
+    
+    try {
+      const res = await fetch(`/api/users/${currentUser.id}/redeem`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': currentUser.id.toString()
+        },
+        body: JSON.stringify({ productId: product.id })
+      });
+      const data = await res.json();
+      
+      if (res.ok && data.success) {
+        setCurrentUser({ ...currentUser, points: data.newPoints });
+        addToCart({ ...product, price: 0 });
+        showToast(`✅ ${product.name} resgatado com sucesso e adicionado ao carrinho!`);
+      } else {
+        showToast(`❌ Erro: ${data.error}`);
+      }
+    } catch (e) {
+      showToast('❌ Erro ao conectar com o servidor.');
+    }
+  };
+
+  return (
+    <div className="page" style={{ maxWidth: 800 }}>
+      <div className="hero">
+        <h1>⭐️ Meus Pontos</h1>
+        <p>Acompanhe e resgate seus pontos por produtos</p>
+      </div>
+
+      <div className="card" style={{ textAlign: 'center', padding: '40px 20px', marginBottom: 24, background: 'linear-gradient(135deg, var(--orange), #f97316)', color: 'white' }}>
+        <h2 style={{ fontSize: 48, margin: '0 0 8px 0', border: 'none', color: 'white' }}>{points}</h2>
+        <p style={{ opacity: 0.9, margin: 0, fontSize: 16 }}>Pontos disponíveis</p>
+        <div style={{ marginTop: 24, fontSize: 14, opacity: 0.8 }}>
+          Ganhe 1 ponto a cada R$ 1,00 gasto na cantina. Os pontos são adicionados após a retirada do pedido.
+        </div>
+      </div>
+
+      <h2 style={{ marginBottom: 16 }}>Recompensas Disponíveis</h2>
+      {redeemableProducts.length === 0 ? (
+        <div className="empty-state">Nenhum produto disponível para resgate no momento.</div>
+      ) : (
+        <div>
+          {Object.entries(groupedProducts).map(([canteenIdStr, canteenProducts]) => {
+            const canteen = canteens.find(c => c.id === parseInt(canteenIdStr));
+            if (!canteen) return null;
+
+            return (
+              <div key={canteen.id} style={{ marginBottom: 32 }}>
+                <h3 style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text)' }}>
+                  <span>{canteen.emoji}</span> {canteen.name}
+                </h3>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 16 }}>
+                  {canteenProducts.map(product => {
+                    const isAffordable = points >= (product.points_price || 0);
+                    return (
+                      <div key={product.id} className="product-card" style={{ opacity: product.stock <= 0 ? 0.6 : 1 }}>
+                        <div className="product-emoji" style={{ background: '#f5f5f5' }}>{product.emoji}</div>
+                        <div className="product-info">
+                          <div className="product-title">{product.name}</div>
+                          <div className="product-desc">{product.desc}</div>
+                          <div className="product-price" style={{ color: 'var(--orange)', marginTop: 8 }}>{product.points_price} pontos</div>
+                          <button 
+                            className={isAffordable ? "btn-outline btn-sm" : "btn-secondary btn-sm"} 
+                            style={{ width: '100%', marginTop: 12 }} 
+                            onClick={() => handleRedeem(product)}
+                            disabled={!isAffordable || product.stock <= 0}
+                          >
+                            {product.stock <= 0 ? 'Esgotado' : isAffordable ? 'Resgatar' : 'Pontos Insuf.'}
+                          </button>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: (s: Screen) => void, currentUser: User | null, setCurrentUser: (u: User) => void, showToast: (msg: string) => void }) {
   const [name, setName] = useState(currentUser?.name || '');
@@ -545,13 +665,18 @@ export default function App() {
               👤 {currentUser?.name}
             </span>
             {currentUser?.role === 'student' && (
-              <button className="btn-secondary" style={{ padding: '8px 14px', fontSize: '13px' }} onClick={() => goTo('meus-pedidos')}>
-                📦 Meus Pedidos
-              </button>
+              <>
+                <button className="btn-secondary" style={{ padding: '8px 14px', fontSize: '13px' }} onClick={() => goTo('pontos')}>
+                  ⭐️ Meus Pontos ({currentUser.points || 0})
+                </button>
+                <button className="btn-secondary" style={{ padding: '8px 14px', fontSize: '13px' }} onClick={() => goTo('meus-pedidos')}>
+                  📦 Meus Pedidos
+                </button>
+                <button className="cart-btn" onClick={() => goTo('carrinho')}>
+                  🛒 Carrinho <span className="cart-badge" id="cart-count">{cartCount}</span>
+                </button>
+              </>
             )}
-            <button className="cart-btn" onClick={() => goTo('carrinho')}>
-              🛒 Carrinho <span className="cart-badge" id="cart-count">{cartCount}</span>
-            </button>
             <button className="btn-secondary" style={{ padding: '8px 14px', fontSize: '13px' }} onClick={logout}>Sair</button>
           </div>
         </nav>
@@ -577,6 +702,7 @@ export default function App() {
           {currentScreen === 'meus-pedidos' && <ScreenMeusPedidos goTo={goTo} currentUser={currentUser} setOrderCode={setOrderCode} showToast={showToast} fetchCanteens={fetchCanteens} />}
           {currentScreen === 'gestor' && <ScreenGestor products={products} fetchProducts={fetchProducts} showToast={showToast} canteens={canteens} fetchCanteens={fetchCanteens} categories={categories} fetchCategories={fetchCategories} />}
           {currentScreen === 'perfil' && <ScreenPerfil goTo={goTo} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} />}
+          {currentScreen === 'pontos' && <ScreenPontos goTo={goTo} products={products} canteens={canteens} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} addToCart={addToCart} />}
         </motion.div>
       </AnimatePresence>
 
@@ -632,7 +758,8 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
           name: data.user.name, 
           email: data.user.email,
           matricula: data.user.matricula,
-          role: data.user.role 
+          role: data.user.role,
+          points: data.user.points || 0
         });
         goTo('cantinas');
       } else {
@@ -691,14 +818,35 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
 }
 
 function ScreenLoginGestor({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setCurrentUser: (u: User) => void }) {
-  const doLoginGestor = () => {
-    setCurrentUser({ id: 999, name: 'Carlos (Gestor)', email: 'carlos@facens.br', role: 'manager' });
-    goTo('gestor');
-  };
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
 
-  const handleKeyDown = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter') {
-      doLoginGestor();
+  const savedAccounts = [
+    { email: 'carlos@cantina.br', name: 'Carlos (Gestor Central)', emoji: '🍕' },
+    { email: 'mariana@cantina.br', name: 'Mariana (Gestor Bloco B)', emoji: '🥗' },
+    { email: 'joao@cantina.br', name: 'João (Gestor Leste)', emoji: '☕' }
+  ];
+
+  const doLoginGestor = async (email: string) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, senha: '123456' })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setCurrentUser(data.user);
+        goTo('gestor');
+      } else {
+        setError(data.error || 'Erro ao fazer login.');
+      }
+    } catch (e) {
+      setError('Erro de conexão.');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -707,17 +855,31 @@ function ScreenLoginGestor({ goTo, setCurrentUser }: { goTo: (s: Screen) => void
       <div className="auth-card">
         <div className="auth-logo">🍽️ OrderPoint</div>
         <div className="tag tag-orange">Gestor da Cantina</div>
-        <p className="auth-subtitle" style={{ marginTop: 8 }}>Acesse o painel de gerenciamento</p>
-        <div className="form">
-          <label>E-mail
-            <input type="email" placeholder="gestor@facens.br" defaultValue="carlos@facens.br" onKeyDown={handleKeyDown} />
-          </label>
-          <label>Senha
-            <input type="password" placeholder="••••••••" defaultValue="123456" onKeyDown={handleKeyDown} />
-          </label>
-          <button className="btn-orange btn-full" onClick={doLoginGestor}>Entrar como Gestor</button>
+        <p className="auth-subtitle" style={{ marginTop: 8 }}>Selecione sua conta salva</p>
+        
+        <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 12 }}>
+          {savedAccounts.map(acc => (
+            <div 
+              key={acc.email}
+              onClick={() => !loading && doLoginGestor(acc.email)}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 16, padding: '16px',
+                border: '1px solid var(--line)', borderRadius: 12, cursor: 'pointer',
+                transition: 'background 0.2s', opacity: loading ? 0.6 : 1
+              }}
+              className="saved-account-card"
+            >
+              <div style={{ fontSize: 32 }}>{acc.emoji}</div>
+              <div style={{ flex: 1, textAlign: 'left' }}>
+                <div style={{ fontWeight: 600, fontSize: 16, color: 'var(--text)' }}>{acc.name}</div>
+                <div style={{ fontSize: 14, color: 'var(--muted)' }}>{acc.email}</div>
+              </div>
+            </div>
+          ))}
         </div>
-        <div className="auth-link"><span onClick={() => goTo('login')}>← Voltar para login aluno</span></div>
+
+        {error && <div className="alert alert-error" style={{ marginTop: 16 }}>{error}</div>}
+        <div className="auth-link" style={{ marginTop: 24 }}><span onClick={() => goTo('login')}>← Voltar para login de aluno</span></div>
       </div>
     </div>
   );
@@ -1111,7 +1273,7 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [addedProductId, setAddedProductId] = useState<number | null>(null);
 
-  const activeProducts = products.filter(p => p.active === 1);
+  const activeProducts = products.filter(p => p.active === 1 && (!selectedCanteen || (p.canteen_id || 1) === selectedCanteen.id));
   const filteredProducts = activeCat === 'todos' ? activeProducts : activeProducts.filter(p => p.cat === activeCat);
 
   const handleAddToCart = (p: Product) => {
@@ -1287,7 +1449,9 @@ function ScreenCarrinho({ goTo, cart, changeQty, clearCart, finalizarPedido }: {
                   <span className="cart-emoji">{item.emoji}</span>
                   <div className="cart-item-info">
                     <div className="cart-item-name">{item.name}</div>
-                    <div className="cart-item-price">R$ {item.price.toFixed(2).replace('.', ',')}</div>
+                    <div className="cart-item-price">
+                      {item.price === 0 ? <span style={{ color: 'var(--success)', fontWeight: 'bold' }}>RESGATE</span> : `R$ ${item.price.toFixed(2).replace('.', ',')}`}
+                    </div>
                   </div>
                   <div className="qty-ctrl">
                     <button className="qty-btn" onClick={() => changeQty(idx, -1)}>−</button>
@@ -1295,7 +1459,7 @@ function ScreenCarrinho({ goTo, cart, changeQty, clearCart, finalizarPedido }: {
                     <button className="qty-btn" onClick={() => changeQty(idx, 1)}>+</button>
                   </div>
                   <strong style={{ minWidth: 64, textAlign: 'right', color: 'var(--success)' }}>
-                    R$ {(item.price * item.qty).toFixed(2).replace('.', ',')}
+                    {item.price === 0 ? 'Grátis' : `R$ ${(item.price * item.qty).toFixed(2).replace('.', ',')}`}
                   </strong>
                 </div>
               ))
@@ -1313,7 +1477,7 @@ function ScreenCarrinho({ goTo, cart, changeQty, clearCart, finalizarPedido }: {
               {cart.map(item => (
                 <div className="summary-line" key={item.name}>
                   <span>{item.name} × {item.qty}</span>
-                  <span>R$ {(item.price * item.qty).toFixed(2).replace('.', ',')}</span>
+                  <span>{item.price === 0 ? 'Grátis' : `R$ ${(item.price * item.qty).toFixed(2).replace('.', ',')}`}</span>
                 </div>
               ))}
             </div>
@@ -1589,13 +1753,15 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
   );
 }
 
-function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCanteens, categories, fetchCategories }: { products: Product[], fetchProducts: () => void, showToast: (msg: string) => void, canteens: Canteen[], fetchCanteens: () => void, categories: Category[], fetchCategories: () => void }) {
+function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteens, fetchCanteens, categories, fetchCategories }: { products: Product[], currentUser: User | null, fetchProducts: () => void, showToast: (msg: string) => void, canteens: Canteen[], fetchCanteens: () => void, categories: Category[], fetchCategories: () => void }) {
   const [activeTab, setActiveTab] = useState<'pedidos' | 'produtos' | 'cardapio' | 'config'>('pedidos');
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderFilter, setOrderFilter] = useState<string>('todos');
   
   // Settings state
-  const myCanteen = canteens[0] || null; 
+  const myCanteen = canteens.find(c => Number(c.id) === Number(currentUser?.canteen_id)) || canteens[0] || null;
+  const filteredProducts = products.filter(p => Number(p.canteen_id || 1) === Number(myCanteen?.id));
+
   const [canteenName, setCanteenName] = useState(myCanteen?.name || '');
   const [canteenDesc, setCanteenDesc] = useState(myCanteen?.desc || '');
   const [canteenLocation, setCanteenLocation] = useState(myCanteen?.location || '');
@@ -1644,7 +1810,9 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
   const [editingId, setEditingId] = useState<number | null>(null);
   const [formName, setFormName] = useState('');
   const [formCat, setFormCat] = useState(categories.length > 0 ? categories[0].name : 'salgados');
+  const [formCanteenId, setFormCanteenId] = useState(canteens.length > 0 ? canteens[0].id.toString() : '1');
   const [formPrice, setFormPrice] = useState('');
+  const [formPointsPrice, setFormPointsPrice] = useState('');
   const [formDesc, setFormDesc] = useState('');
   const [formEmoji, setFormEmoji] = useState('🍽️');
   const [formStock, setFormStock] = useState('10');
@@ -1702,9 +1870,11 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
     setFormName(p.name);
     setFormCat(p.cat);
     setFormPrice(p.price.toString());
+    setFormPointsPrice(p.points_price?.toString() || '');
     setFormDesc(p.desc);
     setFormEmoji(p.emoji);
     setFormStock(p.stock.toString());
+    setFormCanteenId(p.canteen_id?.toString() || '1');
     setActiveTab('cardapio');
   };
 
@@ -1712,7 +1882,9 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
     setEditingId(null);
     setFormName('');
     setFormCat('salgados');
+    setFormCanteenId(myCanteen ? myCanteen.id.toString() : '1');
     setFormPrice('');
+    setFormPointsPrice('');
     setFormDesc('');
     setFormEmoji('🍽️');
     setFormStock('10');
@@ -1728,7 +1900,9 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
     const payload = {
       name: formName,
       cat: formCat,
+      canteen_id: parseInt(formCanteenId, 10),
       price: parseFloat(formPrice),
+      points_price: formPointsPrice ? parseInt(formPointsPrice, 10) : null,
       desc: formDesc,
       emoji: formEmoji,
       stock: parseInt(formStock, 10) || 0
@@ -1922,6 +2096,7 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
               <p style={{ color: 'var(--muted)' }}>Nenhum pedido ativo no momento.</p>
             ) : (
               orders
+                .filter(o => Number(o.canteen_id || 1) === Number(myCanteen?.id))
                 .filter(o => orderFilter === 'todos' || o.status === orderFilter)
                 .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
                 .map(order => {
@@ -1958,7 +2133,7 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
             <button className="btn-orange btn-sm" onClick={handleNewClick}>+ Novo Produto</button>
           </div>
           <div style={{ display: 'grid', gap: 12 }}>
-            {products.map(p => (
+            {filteredProducts.map(p => (
               <div className="order-card" key={p.id}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   <span style={{ fontSize: 28 }}>{p.emoji}</span>
@@ -1984,7 +2159,7 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
                 </div>
               </div>
             ))}
-            {products.length === 0 && (
+            {filteredProducts.length === 0 && (
               <p style={{ color: 'var(--muted)' }}>Nenhum produto cadastrado.</p>
             )}
           </div>
@@ -2049,6 +2224,9 @@ function ScreenGestor({ products, fetchProducts, showToast, canteens, fetchCante
 
               <label>Preço (R$)
                 <input type="number" placeholder="0.00" step="0.50" value={formPrice} onChange={e => setFormPrice(e.target.value)} />
+              </label>
+              <label>Preço em Pontos (Deixe em branco se não for resgatável)
+                <input type="number" placeholder="Ex: 50" value={formPointsPrice} onChange={e => setFormPointsPrice(e.target.value)} />
               </label>
               <label>Estoque Atual
                 <input type="number" placeholder="Ex: 10" value={formStock} onChange={e => setFormStock(e.target.value)} />
