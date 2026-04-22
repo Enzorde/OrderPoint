@@ -158,9 +158,13 @@ class DatabaseManager {
         email TEXT UNIQUE NOT NULL,
         matricula TEXT,
         senha TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'student'
+        role TEXT NOT NULL DEFAULT 'student',
+        points INTEGER DEFAULT 0,
+        canteen_id INTEGER DEFAULT NULL
       )
     `);
+    try { this.db.exec("ALTER TABLE users ADD COLUMN points INTEGER DEFAULT 0"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN canteen_id INTEGER DEFAULT NULL"); } catch (e) {}
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS verification_codes (
@@ -180,10 +184,14 @@ class DatabaseManager {
         emoji TEXT NOT NULL,
         cat TEXT NOT NULL,
         active INTEGER DEFAULT 1,
-        stock INTEGER DEFAULT 10
+        stock INTEGER DEFAULT 10,
+        points_price INTEGER DEFAULT NULL,
+        canteen_id INTEGER DEFAULT 1
       )
     `);
     try { this.db.exec("ALTER TABLE products ADD COLUMN stock INTEGER DEFAULT 10"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE products ADD COLUMN points_price INTEGER DEFAULT NULL"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE products ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
 
     // Orders
     this.db.exec(`
@@ -196,6 +204,7 @@ class DatabaseManager {
         total REAL NOT NULL,
         status TEXT NOT NULL DEFAULT 'aguardando',
         canteen_id INTEGER DEFAULT 1,
+        points_awarded INTEGER DEFAULT 0,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -207,6 +216,7 @@ class DatabaseManager {
       // Column might already exist
     }
     try { this.db.exec("ALTER TABLE orders ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE orders ADD COLUMN points_awarded INTEGER DEFAULT 0"); } catch (e) {}
 
     // Canteens
     this.db.exec(`
@@ -248,8 +258,13 @@ class DatabaseManager {
     // Seed Mock User
     const userCount = this.db.prepare('SELECT COUNT(*) as count FROM users WHERE email = ?').get('admin@facens.br') as any;
     if (userCount.count === 0) {
-      const insertUser = this.db.prepare('INSERT INTO users (name, email, matricula, senha, role) VALUES (?, ?, ?, ?, ?)');
-      insertUser.run('Admin Teste', 'admin@facens.br', 'admin', hashPassword('224641'), 'student');
+      const insertUser = this.db.prepare('INSERT INTO users (name, email, matricula, senha, role, canteen_id) VALUES (?, ?, ?, ?, ?, ?)');
+      insertUser.run('Admin Teste', 'admin@facens.br', 'admin', hashPassword('224641'), 'student', null);
+      
+      // Seed Gestores
+      insertUser.run('Carlos (Gestor Central)', 'carlos@cantina.br', null, hashPassword('123456'), 'manager', 1);
+      insertUser.run('Mariana (Gestor Bloco B)', 'mariana@cantina.br', null, hashPassword('123456'), 'manager', 2);
+      insertUser.run('João (Gestor Leste)', 'joao@cantina.br', null, hashPassword('123456'), 'manager', 3);
     }
 
     // Seed Canteens
@@ -257,8 +272,8 @@ class DatabaseManager {
     if (canteensCount.count === 0) {
       const insertCanteen = this.db.prepare('INSERT INTO canteens (name, desc, location, emoji, color, open_time, close_time) VALUES (?, ?, ?, ?, ?, ?, ?)');
       insertCanteen.run('Cantina Central', 'Salgados, lanches e bebidas para o dia a dia', 'Prédio Principal', '🍕', '#fff8f0', '08:00', '18:00');
-      insertCanteen.run('Cantina do Bloco B', 'Refeições completas e opções saudáveis', 'Bloco B', '🥗', '#f0f7ff', '08:00', '17:00');
-      insertCanteen.run('Cafeteria Leste', 'Cafés, sucos e snacks rápidos', 'Prédio Leste', '☕', '#f5f7fb', '08:00', '18:00');
+      insertCanteen.run('Cantina do Bloco B', 'Refeições completas e opções saudáveis', 'Bloco B', '🥗', '#f0f7ff', '08:00', '22:00');
+      insertCanteen.run('Cafeteria Leste', 'Cafés, sucos e snacks rápidos', 'Prédio Leste', '☕', '#f5f7fb', '08:00', '23:00');
     }
 
     // Seed Categories
@@ -268,18 +283,42 @@ class DatabaseManager {
       insertCat.run('salgados');
       insertCat.run('bebidas');
       insertCat.run('lanches');
+      insertCat.run('doces');
     }
 
     // Seed Products
     const count = this.db.prepare('SELECT COUNT(*) as count FROM products').get() as any;
     if (count.count === 0) {
-      const insertProd = this.db.prepare('INSERT INTO products (name, desc, price, emoji, cat) VALUES (?, ?, ?, ?, ?)');
-      insertProd.run('Coxinha', 'Coxinha de frango crocante', 5.50, '🥟', 'salgados');
-      insertProd.run('Esfiha', 'Esfiha de carne temperada', 4.00, '🥙', 'salgados');
-      insertProd.run('Suco de Uva', 'Suco natural 300ml', 7.00, '🥤', 'bebidas');
-      insertProd.run('Café', 'Café coado 200ml', 3.00, '☕', 'bebidas');
-      insertProd.run('X-Burguer', 'Hamburguer completo', 18.00, '🍔', 'lanches');
-      insertProd.run('Wrap de Frango', 'Frango grelhado com salada', 14.00, '🌯', 'lanches');
+      const insertProd = this.db.prepare('INSERT INTO products (name, desc, price, emoji, cat, points_price, canteen_id) VALUES (?, ?, ?, ?, ?, ?, ?)');
+      // Cantina Central (8 items, 4 redeemable)
+      insertProd.run('Coxinha', 'Coxinha de frango crocante', 5.50, '🥟', 'salgados', 80, 1);
+      insertProd.run('Esfiha', 'Esfiha de carne temperada', 4.00, '🥙', 'salgados', null, 1);
+      insertProd.run('Refrigerante Lata', '350ml gelado', 5.00, '🥤', 'bebidas', 50, 1);
+      insertProd.run('Suco de Uva', 'Suco natural 300ml', 7.00, '🥤', 'bebidas', null, 1);
+      insertProd.run('X-Burguer', 'Hamburguer completo', 18.00, '🍔', 'lanches', null, 1);
+      insertProd.run('Misto Quente', 'Queijo e presunto na chapa', 8.00, '🥪', 'lanches', 100, 1);
+      insertProd.run('Bolo de Pote', 'Bolo de chocolate molhadinho', 9.00, '🧁', 'doces', null, 1);
+      insertProd.run('Água Mineral', '500ml sem gás', 3.00, '💧', 'bebidas', 30, 1);
+      
+      // Cantina do Bloco B (8 items, 4 redeemable)
+      insertProd.run('Salada Caesar', 'Alface, croutons e frango', 15.00, '🥗', 'lanches', null, 2);
+      insertProd.run('Wrap Vegetariano', 'Grão de bico e vegetais', 12.00, '🌯', 'lanches', 150, 2);
+      insertProd.run('Suco Verde', 'Detox de limão e couve', 8.00, '🥤', 'bebidas', null, 2);
+      insertProd.run('Brownie Fit', 'Sem açúcar', 6.00, '🍫', 'doces', 60, 2);
+      insertProd.run('Kombucha', 'Bebida probiótica', 10.00, '🍹', 'bebidas', null, 2);
+      insertProd.run('Sanduíche Natural', 'Pão integral e frango desfiado', 11.00, '🥪', 'lanches', 120, 2);
+      insertProd.run('Salada de Frutas', 'Frutas da estação da feira', 7.00, '🍎', 'doces', 80, 2);
+      insertProd.run('Açaí Médio', 'Açaí 300ml com granola', 14.00, '🥣', 'doces', null, 2);
+
+      // Cafeteria Leste (8 items, 4 redeemable)
+      insertProd.run('Café Expresso', 'Café puro', 3.00, '☕', 'bebidas', null, 3);
+      insertProd.run('Cappuccino', 'Com bastante espuma', 6.00, '☕', 'bebidas', 60, 3);
+      insertProd.run('Pão de Queijo', 'Saindo do forno', 4.00, '🧀', 'salgados', null, 3);
+      insertProd.run('Fatia de Bolo', 'Bolo de cenoura com chocolate', 7.00, '🍰', 'doces', 120, 3);
+      insertProd.run('Croissant', 'Manteiga derretendo', 8.00, '🥐', 'salgados', null, 3);
+      insertProd.run('Macchiato', 'Café com espuma de leite', 5.00, '☕', 'bebidas', 50, 3);
+      insertProd.run('Cookie', 'Cookie de chocolate macio', 4.50, '🍪', 'doces', 45, 3);
+      insertProd.run('Torta de Frango', 'Fatia artesanal', 9.00, '🥧', 'salgados', null, 3);
     }
   }
 }
@@ -311,7 +350,9 @@ class UserController extends BaseController {
     this.app.post("/api/register", this.register.bind(this));
     this.app.post("/usuarios", this.register.bind(this)); // Alias for swagger
     this.app.post("/api/login", this.login.bind(this));
+    this.app.get("/api/users/:id", this.getProfile.bind(this));
     this.app.put("/api/users/:id", this.updateProfile.bind(this));
+    this.app.post("/api/users/:id/redeem", this.redeemReward.bind(this));
     this.app.post("/api/request-code", this.requestCode.bind(this));
     this.app.post("/api/reset-password-request", this.resetPasswordRequest.bind(this));
     this.app.post("/api/reset-password", this.resetPassword.bind(this));
@@ -543,7 +584,9 @@ class UserController extends BaseController {
             name: user.name,
             email: user.email,
             matricula: user.matricula,
-            role: user.role
+            role: user.role,
+            points: user.points,
+            canteen_id: user.canteen_id
           }
         });
       } else {
@@ -551,6 +594,24 @@ class UserController extends BaseController {
       }
     } catch (error) {
       res.status(500).json({ error: "Erro ao fazer login." });
+    }
+  }
+
+  private getProfile(req: Request, res: Response) {
+    const userIdHeader = req.headers['x-user-id'];
+    if (!userIdHeader || userIdHeader !== req.params.id) {
+      return res.status(403).json({ error: "Acesso negado." });
+    }
+
+    try {
+      const user = this.db.prepare('SELECT id, name, email, matricula, role, points, canteen_id FROM users WHERE id = ?').get(req.params.id) as any;
+      if (user) {
+        res.json({ success: true, user });
+      } else {
+        res.status(404).json({ error: "Usuário não encontrado." });
+      }
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao buscar perfil." });
     }
   }
 
@@ -592,6 +653,34 @@ class UserController extends BaseController {
       } else {
         res.status(500).json({ error: "Erro ao atualizar perfil." });
       }
+    }
+  }
+
+  private redeemReward(req: Request, res: Response) {
+    const { productId } = req.body;
+    const userId = req.params.id;
+
+    if (req.headers['x-user-id'] !== userId.toString()) {
+        return res.status(403).json({ error: "Acesso negado." });
+    }
+
+    try {
+        this.db.exec('BEGIN TRANSACTION');
+        
+        const user = this.db.prepare('SELECT points FROM users WHERE id = ?').get(userId) as any;
+        const product = this.db.prepare('SELECT id, name, emoji, stock, points_price FROM products WHERE id = ? AND active = 1').get(productId) as any;
+
+        if (!product || !product.points_price) throw new Error("Produto não disponível para resgate.");
+        if (!user || user.points < product.points_price) throw new Error("Pontos insuficientes.");
+        if (product.stock <= 0) throw new Error("Produto esgotado no estoque.");
+
+        this.db.prepare('UPDATE users SET points = points - ? WHERE id = ?').run(product.points_price, userId);
+        
+        this.db.exec('COMMIT');
+        res.json({ success: true, newPoints: user.points - product.points_price, product: { ...product, price: 0, isReward: true } });
+    } catch(err: any) {
+        this.db.exec('ROLLBACK');
+        res.status(400).json({ error: err.message });
     }
   }
 }
@@ -648,11 +737,11 @@ class ProductController extends BaseController {
   }
 
   private create(req: Request, res: Response) {
-    const { name, desc, price, emoji, cat, stock } = req.body;
+    const { name, desc, price, emoji, cat, stock, points_price, canteen_id } = req.body;
     if (!name || !price || !cat) return res.status(400).json({ error: "Dados incompletos." });
     try {
-      const insert = this.db.prepare('INSERT INTO products (name, desc, price, emoji, cat, stock) VALUES (?, ?, ?, ?, ?, ?)');
-      const result = insert.run(name, desc || '', price, emoji || '🍽️', cat, stock !== undefined ? stock : 10);
+      const insert = this.db.prepare('INSERT INTO products (name, desc, price, emoji, cat, stock, points_price, canteen_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      const result = insert.run(name, desc || '', price, emoji || '🍽️', cat, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1);
       res.status(201).json({ success: true, id: result.lastInsertRowid });
     } catch (error) {
       res.status(500).json({ error: "Erro ao criar produto." });
@@ -660,10 +749,10 @@ class ProductController extends BaseController {
   }
 
   private update(req: Request, res: Response) {
-    const { name, desc, price, emoji, cat, active, stock } = req.body;
+    const { name, desc, price, emoji, cat, active, stock, points_price, canteen_id } = req.body;
     try {
-      const update = this.db.prepare('UPDATE products SET name=?, desc=?, price=?, emoji=?, cat=?, active=?, stock=? WHERE id=?');
-      update.run(name, desc, price, emoji, cat, active !== undefined ? active : 1, stock !== undefined ? stock : 10, req.params.id);
+      const update = this.db.prepare('UPDATE products SET name=?, desc=?, price=?, emoji=?, cat=?, active=?, stock=?, points_price=?, canteen_id=? WHERE id=?');
+      update.run(name, desc, price, emoji, cat, active !== undefined ? active : 1, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1, req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Erro ao atualizar produto." });
@@ -980,10 +1069,21 @@ class OrderController extends BaseController {
             }
           }
         }
+        this.db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, req.params.id);
+      } else if (status === 'retirado') {
+        const order = this.db.prepare('SELECT status, user_id, total, points_awarded FROM orders WHERE id=?').get(req.params.id) as any;
+        if (order && order.status !== 'retirado' && !order.points_awarded && order.user_id) {
+          const pointsEarned = Math.floor(order.total);
+          if (pointsEarned > 0) {
+            this.db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(pointsEarned, order.user_id);
+          }
+          this.db.prepare('UPDATE orders SET status=?, points_awarded=1 WHERE id=?').run(status, req.params.id);
+        } else {
+          this.db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, req.params.id);
+        }
+      } else {
+        this.db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, req.params.id);
       }
-
-      const update = this.db.prepare('UPDATE orders SET status=? WHERE id=?');
-      update.run(status, req.params.id);
       
       this.db.exec('COMMIT');
       res.json({ success: true });
