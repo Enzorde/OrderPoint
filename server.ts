@@ -192,6 +192,17 @@ class DatabaseManager {
     try { this.db.exec("ALTER TABLE products ADD COLUMN stock INTEGER DEFAULT 10"); } catch (e) {}
     try { this.db.exec("ALTER TABLE products ADD COLUMN points_price INTEGER DEFAULT NULL"); } catch (e) {}
     try { this.db.exec("ALTER TABLE products ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE products ADD COLUMN tags TEXT DEFAULT '[]'"); } catch (e) {}
+
+    // Tags
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL,
+        canteen_id INTEGER NOT NULL
+      )
+    `);
 
     // Orders
     this.db.exec(`
@@ -228,10 +239,12 @@ class DatabaseManager {
         emoji TEXT NOT NULL,
         color TEXT NOT NULL,
         open_time TEXT NOT NULL DEFAULT '08:00',
-        close_time TEXT NOT NULL DEFAULT '18:00'
+        close_time TEXT NOT NULL DEFAULT '18:00',
+        points_enabled INTEGER DEFAULT 1
       )
     `);
     try { this.db.exec("ALTER TABLE canteens ADD COLUMN location TEXT NOT NULL DEFAULT ''"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE canteens ADD COLUMN points_enabled INTEGER DEFAULT 1"); } catch (e) {}
 
     // Ratings
     this.db.exec(`
@@ -319,6 +332,34 @@ class DatabaseManager {
       insertProd.run('Macchiato', 'Café com espuma de leite', 5.00, '☕', 'bebidas', 50, 3);
       insertProd.run('Cookie', 'Cookie de chocolate macio', 4.50, '🍪', 'doces', 45, 3);
       insertProd.run('Torta de Frango', 'Fatia artesanal', 9.00, '🥧', 'salgados', null, 3);
+    }
+    
+    // Seed Tags
+    const tagsCount = this.db.prepare('SELECT COUNT(*) as count FROM tags').get() as any;
+    if (tagsCount.count === 0) {
+      const insertTag = this.db.prepare('INSERT INTO tags (name, color, canteen_id) VALUES (?, ?, ?)');
+      insertTag.run('Vegano', '#22c55e', 1); // ID 1
+      insertTag.run('Sem Glúten', '#eab308', 1); // ID 2
+      insertTag.run('Zero Lactose', '#3b82f6', 1); // ID 3
+      insertTag.run('Vegano', '#22c55e', 2); // ID 4
+      insertTag.run('Zero Açúcar', '#ec4899', 2); // ID 5
+      insertTag.run('Vegano', '#22c55e', 3); // ID 6
+      insertTag.run('Sem Glúten', '#eab308', 3); // ID 7
+
+      // Updates initial seeded products
+      this.db.exec("UPDATE products SET tags = '[3]' WHERE name = 'Coxinha' AND canteen_id = 1");
+      this.db.exec("UPDATE products SET tags = '[1, 3]' WHERE name = 'Suco de Uva' AND canteen_id = 1");
+      this.db.exec("UPDATE products SET tags = '[1]' WHERE name = 'Bolo de Pote' AND canteen_id = 1");
+      this.db.exec("UPDATE products SET tags = '[1]' WHERE name = 'Esfiha' AND canteen_id = 1"); 
+
+      this.db.exec("UPDATE products SET tags = '[4]' WHERE name = 'Wrap Vegetariano' AND canteen_id = 2");
+      this.db.exec("UPDATE products SET tags = '[4, 5]' WHERE name = 'Suco Verde' AND canteen_id = 2");
+      this.db.exec("UPDATE products SET tags = '[5]' WHERE name = 'Brownie Fit' AND canteen_id = 2");
+      this.db.exec("UPDATE products SET tags = '[4, 5]' WHERE name = 'Salada de Frutas' AND canteen_id = 2");
+
+      this.db.exec("UPDATE products SET tags = '[6, 7]' WHERE name = 'Café Expresso' AND canteen_id = 3");
+      this.db.exec("UPDATE products SET tags = '[7]' WHERE name = 'Pão de Queijo' AND canteen_id = 3");
+      this.db.exec("UPDATE products SET tags = '[6]' WHERE name = 'Cookie' AND canteen_id = 3");
     }
   }
 }
@@ -737,11 +778,11 @@ class ProductController extends BaseController {
   }
 
   private create(req: Request, res: Response) {
-    const { name, desc, price, emoji, cat, stock, points_price, canteen_id } = req.body;
+    const { name, desc, price, emoji, cat, stock, points_price, canteen_id, tags } = req.body;
     if (!name || !price || !cat) return res.status(400).json({ error: "Dados incompletos." });
     try {
-      const insert = this.db.prepare('INSERT INTO products (name, desc, price, emoji, cat, stock, points_price, canteen_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-      const result = insert.run(name, desc || '', price, emoji || '🍽️', cat, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1);
+      const insert = this.db.prepare('INSERT INTO products (name, desc, price, emoji, cat, stock, points_price, canteen_id, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const result = insert.run(name, desc || '', price, emoji || '🍽️', cat, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1, tags || '[]');
       res.status(201).json({ success: true, id: result.lastInsertRowid });
     } catch (error) {
       res.status(500).json({ error: "Erro ao criar produto." });
@@ -749,10 +790,10 @@ class ProductController extends BaseController {
   }
 
   private update(req: Request, res: Response) {
-    const { name, desc, price, emoji, cat, active, stock, points_price, canteen_id } = req.body;
+    const { name, desc, price, emoji, cat, active, stock, points_price, canteen_id, tags } = req.body;
     try {
-      const update = this.db.prepare('UPDATE products SET name=?, desc=?, price=?, emoji=?, cat=?, active=?, stock=?, points_price=?, canteen_id=? WHERE id=?');
-      update.run(name, desc, price, emoji, cat, active !== undefined ? active : 1, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1, req.params.id);
+      const update = this.db.prepare('UPDATE products SET name=?, desc=?, price=?, emoji=?, cat=?, active=?, stock=?, points_price=?, canteen_id=?, tags=? WHERE id=?');
+      update.run(name, desc, price, emoji, cat, active !== undefined ? active : 1, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1, tags || '[]', req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Erro ao atualizar produto." });
@@ -807,10 +848,10 @@ class CanteenController extends BaseController {
   }
 
   private update(req: Request, res: Response) {
-    const { name, desc, location, emoji, color, open_time, close_time } = req.body;
+    const { name, desc, location, emoji, color, open_time, close_time, points_enabled } = req.body;
     try {
-      const update = this.db.prepare('UPDATE canteens SET name=?, desc=?, location=?, emoji=?, color=?, open_time=?, close_time=? WHERE id=?');
-      update.run(name, desc, location, emoji, color, open_time, close_time, req.params.id);
+      const update = this.db.prepare('UPDATE canteens SET name=?, desc=?, location=?, emoji=?, color=?, open_time=?, close_time=?, points_enabled=? WHERE id=?');
+      update.run(name, desc, location, emoji, color, open_time, close_time, points_enabled !== undefined ? points_enabled : 1, req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Erro ao atualizar cantina." });
@@ -861,6 +902,49 @@ class CategoryController extends BaseController {
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Erro ao deletar categoria." });
+    }
+  }
+}
+
+class TagController extends BaseController {
+  constructor(db: DatabaseSync, app: express.Application) {
+    super(db, app);
+  }
+
+  public registerRoutes() {
+    this.app.get("/api/tags", this.getAll.bind(this));
+    this.app.post("/api/tags", this.create.bind(this));
+    this.app.delete("/api/tags/:id", this.delete.bind(this));
+  }
+
+  private getAll(req: Request, res: Response) {
+    try {
+      const tags = this.db.prepare('SELECT * FROM tags').all();
+      res.json(tags);
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao buscar tags." });
+    }
+  }
+
+  private create(req: Request, res: Response) {
+    const { name, color, canteen_id } = req.body;
+    if (!name || !color || !canteen_id) return res.status(400).json({ error: "Dados incompletos." });
+    try {
+      const insert = this.db.prepare('INSERT INTO tags (name, color, canteen_id) VALUES (?, ?, ?)');
+      const result = insert.run(name, color, canteen_id);
+      res.status(201).json({ success: true, id: result.lastInsertRowid });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao criar tag." });
+    }
+  }
+
+  private delete(req: Request, res: Response) {
+    try {
+      const del = this.db.prepare('DELETE FROM tags WHERE id=?');
+      del.run(parseInt(req.params.id, 10));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao excluir tag." });
     }
   }
 }
@@ -1071,10 +1155,13 @@ class OrderController extends BaseController {
         }
         this.db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, req.params.id);
       } else if (status === 'retirado') {
-        const order = this.db.prepare('SELECT status, user_id, total, points_awarded FROM orders WHERE id=?').get(req.params.id) as any;
+        const order = this.db.prepare('SELECT status, user_id, total, points_awarded, canteen_id FROM orders WHERE id=?').get(req.params.id) as any;
         if (order && order.status !== 'retirado' && !order.points_awarded && order.user_id) {
+          const canteen = this.db.prepare('SELECT points_enabled FROM canteens WHERE id=?').get(order.canteen_id) as any;
+          const isPointsEnabled = canteen && canteen.points_enabled === 1;
+
           const pointsEarned = Math.floor(order.total);
-          if (pointsEarned > 0) {
+          if (pointsEarned > 0 && isPointsEnabled) {
             this.db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(pointsEarned, order.user_id);
           }
           this.db.prepare('UPDATE orders SET status=?, points_awarded=1 WHERE id=?').run(status, req.params.id);
@@ -1127,7 +1214,8 @@ class AppServer {
       new CanteenController(this.dbManager.db, this.app),
       new CategoryController(this.dbManager.db, this.app),
       new RatingController(this.dbManager.db, this.app),
-      new OrderController(this.dbManager.db, this.app)
+      new OrderController(this.dbManager.db, this.app),
+      new TagController(this.dbManager.db, this.app)
     ];
 
     for (const controller of controllers) {
