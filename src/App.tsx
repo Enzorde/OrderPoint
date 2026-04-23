@@ -23,6 +23,14 @@ type Product = {
   stock: number;
   points_price?: number;
   canteen_id?: number;
+  tags?: string;
+};
+
+type Tag = {
+  id: number;
+  name: string;
+  color: string;
+  canteen_id: number;
 };
 
 type CartItem = {
@@ -44,6 +52,7 @@ type Canteen = {
   close_time: string;
   avg_rating: number;
   rating_count: number;
+  points_enabled?: number;
 };
 
 type Order = {
@@ -481,6 +490,7 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [canteens, setCanteens] = useState<Canteen[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
+  const [tags, setTags] = useState<Tag[]>([]);
   const [selectedCanteen, setSelectedCanteen] = useState<Canteen | null>(null);
 
   useEffect(() => {
@@ -526,15 +536,27 @@ export default function App() {
     }
   };
 
+  const fetchTags = async () => {
+    try {
+      const res = await fetch('/api/tags');
+      const data = await res.json();
+      setTags(data);
+    } catch (err) {
+      console.error("Erro ao carregar tags", err);
+    }
+  };
+
   useEffect(() => {
     fetchProducts();
     fetchCanteens();
     fetchCategories();
+    fetchTags();
     
     // Polling para manter o catálogo e estoque atualizados em tempo real
     const interval = setInterval(() => {
       fetchProducts();
       fetchCanteens();
+      fetchTags();
     }, 5000);
     
     return () => clearInterval(interval);
@@ -695,12 +717,12 @@ export default function App() {
           {currentScreen === 'cadastro' && <ScreenCadastro goTo={goTo} />}
           {currentScreen === 'esqueci-senha' && <ScreenEsqueciSenha goTo={goTo} />}
           {currentScreen === 'cantinas' && <ScreenCantinas goTo={goTo} canteens={canteens} setSelectedCanteen={setSelectedCanteen} />}
-          {currentScreen === 'catalogo' && <ScreenCatalogo goTo={goTo} addToCart={addToCart} products={products} selectedCanteen={selectedCanteen} categories={categories} />}
+          {currentScreen === 'catalogo' && <ScreenCatalogo goTo={goTo} addToCart={addToCart} products={products} selectedCanteen={selectedCanteen} categories={categories} tags={tags} />}
           {currentScreen === 'carrinho' && <ScreenCarrinho goTo={goTo} cart={cart} changeQty={changeQty} clearCart={clearCart} finalizarPedido={finalizarPedido} />}
           {currentScreen === 'confirmacao' && <ScreenConfirmacao goTo={goTo} orderCode={orderCode} />}
           {currentScreen === 'status' && <ScreenStatus goTo={goTo} orderCode={orderCode} />}
           {currentScreen === 'meus-pedidos' && <ScreenMeusPedidos goTo={goTo} currentUser={currentUser} setOrderCode={setOrderCode} showToast={showToast} fetchCanteens={fetchCanteens} />}
-          {currentScreen === 'gestor' && <ScreenGestor products={products} fetchProducts={fetchProducts} showToast={showToast} canteens={canteens} fetchCanteens={fetchCanteens} categories={categories} fetchCategories={fetchCategories} />}
+          {currentScreen === 'gestor' && <ScreenGestor products={products} tags={tags} fetchTags={fetchTags} currentUser={currentUser} fetchProducts={fetchProducts} showToast={showToast} canteens={canteens} fetchCanteens={fetchCanteens} categories={categories} fetchCategories={fetchCategories} />}
           {currentScreen === 'perfil' && <ScreenPerfil goTo={goTo} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} />}
           {currentScreen === 'pontos' && <ScreenPontos goTo={goTo} products={products} canteens={canteens} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} addToCart={addToCart} />}
         </motion.div>
@@ -1268,7 +1290,7 @@ function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Scre
   );
 }
 
-function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories }: { goTo: (s: Screen) => void, addToCart: (p: Product) => void, products: Product[], selectedCanteen: Canteen | null, categories: Category[] }) {
+function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories, tags }: { goTo: (s: Screen) => void, addToCart: (p: Product) => void, products: Product[], selectedCanteen: Canteen | null, categories: Category[], tags: Tag[] }) {
   const [activeCat, setActiveCat] = useState('todos');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [addedProductId, setAddedProductId] = useState<number | null>(null);
@@ -1320,7 +1342,34 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
             <div className="product-info">
               <div className="product-name">{p.name}</div>
               <div className="product-desc">{p.desc}</div>
-              <div className="product-footer">
+              {p.tags && p.tags !== '[]' && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                  {(() => {
+                    try {
+                      const tagIds = JSON.parse(p.tags) as number[];
+                      return tagIds.map(id => {
+                        const t = tags.find(tag => tag.id === id);
+                        if (!t) return null;
+                        return (
+                          <span key={id} style={{ 
+                            background: t.color, 
+                            color: '#ffffff', 
+                            padding: '2px 8px', 
+                            borderRadius: '12px', 
+                            fontSize: '11px',
+                            fontWeight: 600,
+                            textShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                            border: '1px solid rgba(0,0,0,0.1)'
+                          }}>
+                            {t.name}
+                          </span>
+                        );
+                      });
+                    } catch (e) { return null; }
+                  })()}
+                </div>
+              )}
+              <div className="product-footer" style={{ marginTop: 12 }}>
                 <span className="product-price">R$ {p.price.toFixed(2).replace('.', ',')}</span>
                 <button 
                   className="btn-orange btn-sm" 
@@ -1407,6 +1456,34 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
               <p style={{ color: 'var(--muted)', fontSize: 16, lineHeight: 1.5, margin: '0 0 24px 0' }}>
                 {selectedProduct.desc}
               </p>
+
+              {selectedProduct.tags && selectedProduct.tags !== '[]' && (
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', justifyContent: 'center', marginBottom: 24 }}>
+                  {(() => {
+                    try {
+                      const tagIds = JSON.parse(selectedProduct.tags) as number[];
+                      return tagIds.map(id => {
+                        const t = tags.find(tag => tag.id === id);
+                        if (!t) return null;
+                        return (
+                          <span key={id} style={{ 
+                            background: t.color, 
+                            color: '#ffffff', 
+                            padding: '4px 12px', 
+                            borderRadius: '16px', 
+                            fontSize: '13px',
+                            fontWeight: 600,
+                            textShadow: '0 1px 2px rgba(0,0,0,0.3)',
+                            border: '1px solid rgba(0,0,0,0.1)'
+                          }}>
+                            {t.name}
+                          </span>
+                        );
+                      });
+                    } catch (e) { return null; }
+                  })()}
+                </div>
+              )}
               
               <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
                 <button 
@@ -1753,7 +1830,7 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
   );
 }
 
-function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteens, fetchCanteens, categories, fetchCategories }: { products: Product[], currentUser: User | null, fetchProducts: () => void, showToast: (msg: string) => void, canteens: Canteen[], fetchCanteens: () => void, categories: Category[], fetchCategories: () => void }) {
+function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, canteens, fetchCanteens, categories, fetchCategories, fetchTags }: { products: Product[], tags: Tag[], currentUser: User | null, fetchProducts: () => void, showToast: (msg: string) => void, canteens: Canteen[], fetchCanteens: () => void, categories: Category[], fetchCategories: () => void, fetchTags: () => void }) {
   const [activeTab, setActiveTab] = useState<'pedidos' | 'produtos' | 'cardapio' | 'config'>('pedidos');
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderFilter, setOrderFilter] = useState<string>('todos');
@@ -1769,6 +1846,7 @@ function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteen
   const [canteenColor, setCanteenColor] = useState(myCanteen?.color || '#ffffff');
   const [openTime, setOpenTime] = useState(myCanteen?.open_time || '08:00');
   const [closeTime, setCloseTime] = useState(myCanteen?.close_time || '18:00');
+  const [pointsEnabled, setPointsEnabled] = useState(myCanteen?.points_enabled !== undefined ? myCanteen.points_enabled === 1 : true);
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
   useEffect(() => {
@@ -1780,6 +1858,7 @@ function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteen
       setCanteenColor(myCanteen.color);
       setOpenTime(myCanteen.open_time);
       setCloseTime(myCanteen.close_time);
+      setPointsEnabled(myCanteen.points_enabled !== undefined ? myCanteen.points_enabled === 1 : true);
     }
   }, [myCanteen]);
 
@@ -1796,7 +1875,8 @@ function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteen
           emoji: canteenEmoji,
           color: canteenColor,
           open_time: openTime, 
-          close_time: closeTime 
+          close_time: closeTime,
+          points_enabled: pointsEnabled ? 1 : 0
         })
       });
       showToast('✅ Configurações atualizadas!');
@@ -1816,8 +1896,15 @@ function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteen
   const [formDesc, setFormDesc] = useState('');
   const [formEmoji, setFormEmoji] = useState('🍽️');
   const [formStock, setFormStock] = useState('10');
+  const [formTags, setFormTags] = useState<number[]>([]);
   const [showProductEmojiPicker, setShowProductEmojiPicker] = useState(false);
   
+  // Tag management
+  const [newTagName, setNewTagName] = useState('');
+  const [newTagColor, setNewTagColor] = useState('#e5e7eb');
+  const [isAddingTag, setIsAddingTag] = useState(false);
+  const [deleteTagConfirmId, setDeleteTagConfirmId] = useState<number | null>(null);
+
   // Category management
   const [newCatName, setNewCatName] = useState('');
   const [isAddingCat, setIsAddingCat] = useState(false);
@@ -1875,6 +1962,7 @@ function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteen
     setFormEmoji(p.emoji);
     setFormStock(p.stock.toString());
     setFormCanteenId(p.canteen_id?.toString() || '1');
+    try { setFormTags(JSON.parse(p.tags || '[]')); } catch (e) { setFormTags([]); }
     setActiveTab('cardapio');
   };
 
@@ -1888,6 +1976,7 @@ function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteen
     setFormDesc('');
     setFormEmoji('🍽️');
     setFormStock('10');
+    setFormTags([]);
     setActiveTab('cardapio');
   };
 
@@ -1905,7 +1994,8 @@ function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteen
       points_price: formPointsPrice ? parseInt(formPointsPrice, 10) : null,
       desc: formDesc,
       emoji: formEmoji,
-      stock: parseInt(formStock, 10) || 0
+      stock: parseInt(formStock, 10) || 0,
+      tags: JSON.stringify(formTags)
     };
 
     try {
@@ -2077,6 +2167,22 @@ function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteen
               <label>Horário de Fechamento
                 <input type="time" value={closeTime} onChange={e => setCloseTime(e.target.value)} />
               </label>
+
+              <div style={{ marginTop: 12, padding: 16, background: 'var(--bg-secondary)', borderRadius: 12, border: '1px solid var(--line)' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 12, margin: 0, cursor: 'pointer' }}>
+                  <input 
+                    type="checkbox" 
+                    checked={pointsEnabled} 
+                    onChange={e => setPointsEnabled(e.target.checked)} 
+                    style={{ width: 20, height: 20, accentColor: 'var(--orange)' }}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Ativar acúmulo de pontos</div>
+                    <div style={{ fontSize: 13, color: 'var(--muted)', fontWeight: 'normal', marginTop: 2 }}>Se estiver desligado, compras nesta cantina não darão pontos aos alunos.</div>
+                  </div>
+                </label>
+              </div>
+
               <button className="btn-orange" style={{ marginTop: 12 }} onClick={handleSaveSettings}>Salvar Configurações</button>
             </div>
           </div>
@@ -2188,37 +2294,48 @@ function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteen
               <label>Nome do produto
                 <input type="text" placeholder="Ex: Pão de Queijo" value={formName} onChange={e => setFormName(e.target.value)} />
               </label>
-              <label>Categoria
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center' }}>
-                  <select value={formCat} onChange={e => setFormCat(e.target.value)} style={{ flex: 1 }}>
-                    {categories.map(cat => (
-                      <option key={cat.id} value={cat.name}>{cat.name.charAt(0).toUpperCase() + cat.name.slice(1)}</option>
-                    ))}
-                  </select>
-                  <button className="btn-secondary btn-sm" onClick={() => setIsAddingCat(!isAddingCat)}>
-                    {isAddingCat ? 'Cancelar' : '+ Nova'}
+
+              {/* Categories Management */}
+              <div style={{ display: 'grid', gap: '6px', fontWeight: 'bold', fontSize: '14px' }}>
+                Categorias do Produto
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8, fontWeight: 'normal' }}>
+                  {categories.map(cat => (
+                    <div 
+                      key={cat.id} 
+                      onClick={() => setFormCat(cat.name)}
+                      style={{ 
+                        padding: '4px 12px', 
+                        borderRadius: 16, 
+                        border: '1px solid var(--line)',
+                        background: formCat === cat.name ? 'rgba(249, 115, 22, 0.1)' : 'transparent',
+                        color: formCat === cat.name ? 'var(--orange)' : 'var(--muted)',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        transition: 'all 0.2s',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6
+                      }}
+                    >
+                      {formCat === cat.name && <span>✓</span>}
+                      {cat.name.charAt(0).toUpperCase() + cat.name.slice(1)}
+                      <span 
+                        onClick={(e) => { e.stopPropagation(); setDeleteCatConfirmId(cat.id); }}
+                        style={{ color: 'var(--danger)', marginLeft: 4, cursor: 'pointer', padding: '0 4px' }}
+                      >×</span>
+                    </div>
+                  ))}
+                  <button type="button" className="btn-secondary btn-sm" style={{ padding: '4px 8px', fontSize: 12 }} onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsAddingCat(!isAddingCat); }}>
+                    {isAddingCat ? 'Cancelar' : '+ Nova Categoria'}
                   </button>
                 </div>
-              </label>
+              </div>
               
               {isAddingCat && (
                 <div style={{ display: 'flex', gap: 8, marginBottom: 16, padding: 12, background: 'var(--bg-secondary)', borderRadius: 8 }}>
                   <input type="text" placeholder="Nome da categoria" value={newCatName} onChange={e => setNewCatName(e.target.value)} style={{ flex: 1, marginBottom: 0 }} />
-                  <button className="btn-orange btn-sm" onClick={handleAddCategory}>Salvar</button>
-                </div>
-              )}
-
-              {categories.length > 0 && !isAddingCat && (
-                <div style={{ marginBottom: 16 }}>
-                  <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>Gerenciar Categorias:</p>
-                  <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-                    {categories.map(cat => (
-                      <div key={cat.id} className="tag" style={{ display: 'flex', alignItems: 'center', gap: 4, padding: '6px 12px', background: 'white', border: '1px solid var(--line)', color: 'var(--text)' }}>
-                        {cat.name}
-                        <span style={{ cursor: 'pointer', color: 'var(--danger)', marginLeft: 4, padding: '0 4px', fontWeight: 'bold' }} onClick={() => setDeleteCatConfirmId(cat.id)}>×</span>
-                      </div>
-                    ))}
-                  </div>
+                  <button type="button" className="btn-orange btn-sm" onClick={(e) => { e.preventDefault(); handleAddCategory(); }}>Salvar</button>
                 </div>
               )}
 
@@ -2234,18 +2351,166 @@ function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteen
               <label>Descrição
                 <input type="text" placeholder="Descreva o produto" value={formDesc} onChange={e => setFormDesc(e.target.value)} />
               </label>
+
+              {/* Tags Management */}
+              <div style={{ display: 'grid', gap: '6px', fontWeight: 'bold', fontSize: '14px' }}>
+                Tags do Produto
+                <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8, fontWeight: 'normal' }}>
+                  {tags.filter(t => t.canteen_id === myCanteen?.id).map(tag => (
+                    <div 
+                      key={tag.id} 
+                      onClick={() => {
+                        if (formTags.includes(tag.id)) {
+                          setFormTags(formTags.filter(id => id !== tag.id));
+                        } else {
+                          setFormTags([...formTags, tag.id]);
+                        }
+                      }}
+                      style={{ 
+                        padding: '4px 12px', 
+                        borderRadius: 16, 
+                        border: `1px solid ${tag.color}50`,
+                        background: formTags.includes(tag.id) ? tag.color + '40' : 'transparent',
+                        color: formTags.includes(tag.id) ? tag.color : 'var(--muted)',
+                        cursor: 'pointer',
+                        fontSize: 12,
+                        fontWeight: 600,
+                        transition: 'all 0.2s',
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 6
+                      }}
+                    >
+                      {formTags.includes(tag.id) && <span>✓</span>}
+                      {tag.name}
+                      <span 
+                        onClick={(e) => { e.stopPropagation(); setDeleteTagConfirmId(tag.id); }}
+                        style={{ color: 'var(--danger)', marginLeft: 4, cursor: 'pointer', padding: '0 4px' }}
+                      >×</span>
+                    </div>
+                  ))}
+                  <button type="button" className="btn-secondary btn-sm" style={{ padding: '4px 8px', fontSize: 12 }} onClick={(e) => { e.preventDefault(); e.stopPropagation(); setIsAddingTag(!isAddingTag); }}>
+                    {isAddingTag ? 'Cancelar' : '+ Nova Tag'}
+                  </button>
+                </div>
+              </div>
+
+              {isAddingTag && (
+                <div style={{ display: 'flex', gap: 8, marginBottom: 16, padding: 12, background: 'var(--bg-secondary)', borderRadius: 8, alignItems: 'center' }}>
+                  <input type="color" value={newTagColor} onChange={e => setNewTagColor(e.target.value)} style={{ width: 32, height: 32, padding: 0, border: 'none', borderRadius: 4, cursor: 'pointer' }} />
+                  <input type="text" placeholder="Nome da tag (ex: Vegano)" value={newTagName} onChange={e => setNewTagName(e.target.value)} style={{ flex: 1, marginBottom: 0 }} />
+                  <button type="button" className="btn-orange btn-sm" onClick={async (e) => {
+                    e.preventDefault();
+                    if (!newTagName || !myCanteen) return;
+                    try {
+                      const res = await fetch('/api/tags', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ name: newTagName, color: newTagColor, canteen_id: myCanteen.id })
+                      });
+                      if (res.ok) {
+                        showToast('✅ Tag adicionada!');
+                        setNewTagName('');
+                        setNewTagColor('#e5e7eb');
+                        setIsAddingTag(false);
+                        fetchTags();
+                      }
+                    } catch (e) {
+                      showToast('Erro ao criar tag');
+                    }
+                  }}>Salvar</button>
+                </div>
+              )}
+
               <div style={{ display: 'flex', gap: 12, marginTop: 8 }}>
-                <button className="btn-orange" style={{ flex: 1 }} onClick={handleSaveProduct}>
+                <button type="button" className="btn-orange" style={{ flex: 1 }} onClick={(e) => { e.preventDefault(); handleSaveProduct(); }}>
                   {editingId ? 'Salvar Alterações' : 'Adicionar Produto'}
                 </button>
                 {editingId && (
-                  <button className="btn-secondary" onClick={handleNewClick}>Cancelar</button>
+                  <button type="button" className="btn-secondary" onClick={(e) => { e.preventDefault(); handleNewClick(); }}>Cancelar</button>
                 )}
               </div>
             </div>
           </div>
         </div>
       )}
+
+      <AnimatePresence>
+        {deleteCatConfirmId !== null && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(0,0,0,0.5)', zIndex: 9999,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 20
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="card"
+              style={{ maxWidth: 400, width: '100%', textAlign: 'center' }}
+            >
+              <h3 style={{ marginBottom: 12, color: 'var(--danger)' }}>Excluir Categoria</h3>
+              <p style={{ marginBottom: 24, color: 'var(--muted)' }}>
+                Tem certeza que deseja excluir esta categoria permanentemente? Os produtos que usam esta categoria continuarão existindo.
+              </p>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                <button className="btn-secondary" onClick={() => setDeleteCatConfirmId(null)}>Cancelar</button>
+                <button className="btn-danger" onClick={() => handleDeleteCategory(deleteCatConfirmId)}>Sim, Excluir</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+
+        {deleteTagConfirmId !== null && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(0,0,0,0.5)', zIndex: 9999,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 20
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="card"
+              style={{ maxWidth: 400, width: '100%', textAlign: 'center' }}
+            >
+              <h3 style={{ marginBottom: 12, color: 'var(--danger)' }}>Excluir Tag</h3>
+              <p style={{ marginBottom: 24, color: 'var(--muted)' }}>
+                Tem certeza que deseja excluir esta tag permanentemente? Os produtos que usam esta tag continuarão existindo.
+              </p>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+                <button className="btn-secondary" onClick={() => setDeleteTagConfirmId(null)}>Cancelar</button>
+                <button className="btn-danger" onClick={async () => {
+                  try {
+                    const res = await fetch(`/api/tags/${deleteTagConfirmId}`, { method: 'DELETE' });
+                    if (res.ok) {
+                      showToast('🗑️ Tag excluída!');
+                      setDeleteTagConfirmId(null);
+                      fetchTags();
+                      // Remove tag from formTags if it was selected
+                      setFormTags(prev => prev.filter(id => id !== deleteTagConfirmId));
+                    }
+                  } catch (e) {
+                    showToast('Erro ao excluir tag.');
+                  }
+                }}>Sim, Excluir</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {deleteOrderConfirmId && (
@@ -2310,36 +2575,6 @@ function ScreenGestor({ products, currentUser, fetchProducts, showToast, canteen
           </motion.div>
         )}
 
-        {deleteCatConfirmId && (
-          <motion.div
-            initial={{ opacity: 0 }}
-            animate={{ opacity: 1 }}
-            exit={{ opacity: 0 }}
-            style={{
-              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
-              background: 'rgba(0,0,0,0.5)', zIndex: 9999,
-              display: 'flex', alignItems: 'center', justifyContent: 'center',
-              padding: 20
-            }}
-          >
-            <motion.div
-              initial={{ scale: 0.9, opacity: 0 }}
-              animate={{ scale: 1, opacity: 1 }}
-              exit={{ scale: 0.9, opacity: 0 }}
-              className="card"
-              style={{ maxWidth: 400, width: '100%', textAlign: 'center' }}
-            >
-              <h3 style={{ marginBottom: 12, color: 'var(--danger)' }}>Excluir Categoria</h3>
-              <p style={{ marginBottom: 24, color: 'var(--muted)' }}>
-                Tem certeza que deseja excluir esta categoria? Os produtos associados a ela podem ficar sem categoria. <strong>Esta ação não poderá ser desfeita.</strong>
-              </p>
-              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
-                <button className="btn-secondary" onClick={() => setDeleteCatConfirmId(null)}>Cancelar</button>
-                <button className="btn-danger" onClick={() => handleDeleteCategory(deleteCatConfirmId)}>Sim, Excluir</button>
-              </div>
-            </motion.div>
-          </motion.div>
-        )}
       </AnimatePresence>
     </div>
   );
