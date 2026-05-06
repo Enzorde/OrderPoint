@@ -39,6 +39,21 @@ type CartItem = {
   price: number;
   emoji: string;
   qty: number;
+  canteen_id?: number;
+  isReward?: boolean;
+  points_price?: number;
+};
+
+type Coupon = {
+  id: number;
+  code: string;
+  discount_pct: number;
+  max_uses: number | null;
+  used_count: number;
+  expires_at: string | null;
+  min_value: number;
+  canteen_id: number;
+  active: number;
 };
 
 type Canteen = {
@@ -265,7 +280,7 @@ function ScreenPontos({ goTo, products, canteens, currentUser, setCurrentUser, s
       
       if (res.ok && data.success) {
         setCurrentUser({ ...currentUser, points: data.newPoints });
-        addToCart({ ...product, price: 0 });
+        addToCart({ ...product, price: 0, isReward: true });
         showToast(`✅ ${product.name} resgatado com sucesso e adicionado ao carrinho!`);
       } else {
         showToast(`❌ Erro: ${data.error}`);
@@ -476,6 +491,7 @@ export default function App() {
     const saved = localStorage.getItem('currentUser');
     return saved ? JSON.parse(saved) : null;
   });
+  const [previousScreen, setPreviousScreen] = useState<Screen | null>(null);
   const [cart, setCart] = useState<CartItem[]>(() => {
     const savedUser = localStorage.getItem('currentUser');
     const user = savedUser ? JSON.parse(savedUser) : null;
@@ -487,11 +503,29 @@ export default function App() {
   });
   const [orderCode, setOrderCode] = useState<string>('');
   const [toastMsg, setToastMsg] = useState<string | null>(null);
+  const [couponCodeState, setCouponCodeState] = useState('');
+  const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
+  const [couponError, setCouponError] = useState('');
   const [products, setProducts] = useState<Product[]>([]);
   const [canteens, setCanteens] = useState<Canteen[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedCanteen, setSelectedCanteen] = useState<Canteen | null>(null);
+
+  const currentUserRef = useRef(currentUser);
+  useEffect(() => {
+    currentUserRef.current = currentUser;
+  }, [currentUser]);
+
+  const updateCart = (action: React.SetStateAction<CartItem[]>) => {
+    setCart((prev) => {
+      const newCart = typeof action === 'function' ? (action as any)(prev) : action;
+      if (currentUserRef.current) {
+        localStorage.setItem(`cart_${currentUserRef.current.id}`, JSON.stringify(newCart));
+      }
+      return newCart;
+    });
+  };
 
   useEffect(() => {
     if (currentUser) {
@@ -509,12 +543,6 @@ export default function App() {
       setCart([]);
     }
   }, [currentUser?.id]);
-
-  useEffect(() => {
-    if (currentUser) {
-      localStorage.setItem(`cart_${currentUser.id}`, JSON.stringify(cart));
-    }
-  }, [cart, currentUser]);
 
   const fetchProducts = async () => {
     try {
@@ -573,6 +601,7 @@ export default function App() {
   };
 
   const goTo = (screen: Screen) => {
+    setPreviousScreen(currentScreen);
     setCurrentScreen(screen);
     window.scrollTo(0, 0);
   };
@@ -582,8 +611,8 @@ export default function App() {
     setTimeout(() => setToastMsg(null), 2000);
   };
 
-  const addToCart = (product: Product) => {
-    const existing = cart.find(i => i.id === product.id);
+  const addToCart = (product: Product & { isReward?: boolean }) => {
+    const existing = cart.find(i => i.id === product.id && i.isReward === product.isReward);
     if (existing && existing.qty + 1 > product.stock) {
       showToast(`⚠️ Limite de estoque atingido!`);
       return;
@@ -593,12 +622,12 @@ export default function App() {
       return;
     }
 
-    setCart(prev => {
-      const ex = prev.find(i => i.id === product.id);
+    updateCart(prev => {
+      const ex = prev.find(i => i.id === product.id && i.isReward === product.isReward);
       if (ex) {
-        return prev.map(i => i.id === product.id ? { ...i, qty: i.qty + 1 } : i);
+        return prev.map(i => (i.id === product.id && i.isReward === product.isReward) ? { ...i, qty: i.qty + 1 } : i);
       }
-      return [...prev, { id: product.id, name: product.name, price: product.price, emoji: product.emoji, qty: 1 }];
+      return [...prev, { id: product.id, name: product.name, price: product.price, emoji: product.emoji, qty: 1, canteen_id: product.canteen_id, isReward: product.isReward, points_price: product.points_price }];
     });
     showToast(`✅ ${product.name} adicionado!`);
   };
@@ -612,7 +641,7 @@ export default function App() {
       return;
     }
 
-    setCart(prev => {
+    updateCart(prev => {
       const newCart = [...prev];
       newCart[index] = { ...newCart[index], qty: newCart[index].qty + delta };
       if (newCart[index].qty <= 0) {
@@ -622,7 +651,82 @@ export default function App() {
     });
   };
 
-  const clearCart = () => setCart([]);
+  const handleGoBackFromCart = () => {
+    if (previousScreen === 'catalogo') {
+      if (selectedCanteen && !isCanteenOpen(selectedCanteen)) {
+         showToast('A cantina que você estava navegando está fechada. Redirecionando para cantinas.');
+         goTo('cantinas');
+      } else {
+         setCurrentScreen('catalogo');
+         window.scrollTo(0, 0);
+      }
+    } else {
+       if (previousScreen && previousScreen !== 'carrinho') {
+         setCurrentScreen(previousScreen);
+       } else {
+         setCurrentScreen('cantinas');
+       }
+       window.scrollTo(0, 0);
+    }
+  };
+
+  const clearCart = () => {
+    updateCart([]);
+    setAppliedCoupon(null);
+    setCouponCodeState('');
+    setCouponError('');
+  };
+
+  const handleApplyCoupon = async (code: string) => {
+    if (!code) {
+       setAppliedCoupon(null);
+       setCouponCodeState('');
+       setCouponError('');
+       return;
+    }
+    setCouponError('');
+    try {
+      // Find which canteen we are applying for, if cart is empty we don't know
+      if (cart.length === 0) return;
+      const canteenIds = [...new Set(cart.map(item => item.canteen_id || products.find(p => p.id === item.id)?.canteen_id || 1))];
+      
+      let applicable: any = null;
+      let errorMsg = 'Cupom inválido para as cantinas do carrinho.';
+
+      for (const cid of canteenIds) {
+        const applicableItems = cart.filter(item => (item.canteen_id || products.find(p => p.id === item.id)?.canteen_id || 1) === cid);
+        const canteenTotal = applicableItems.reduce((sum, item) => sum + item.price * item.qty, 0);
+
+        const res = await fetch('/api/coupons/validate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ code: code.toUpperCase(), canteen_id: cid, cart_total: canteenTotal })
+        });
+        const data = await res.json();
+        if (res.ok && data.success) {
+          applicable = data.coupon;
+          break;
+        } else {
+          if (data.error !== 'Cupom inválido.') {
+            errorMsg = data.error;
+          }
+        }
+      }
+
+      if (applicable) {
+        setAppliedCoupon(applicable);
+        setCouponCodeState(applicable.code);
+        setCouponError('');
+        showToast(`✅ Cupom ${applicable.code} de ${applicable.discount_pct}% aplicado!`);
+      } else {
+        setCouponError(errorMsg);
+        setAppliedCoupon(null);
+      }
+    } catch (e) {
+      setCouponError('Erro ao validar cupom.');
+      setAppliedCoupon(null);
+    }
+  };
 
   const finalizarPedido = async () => {
     if (cart.length === 0) {
@@ -630,32 +734,49 @@ export default function App() {
       return;
     }
     
-    const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+    // Group items by canteen
+    const ordersByCanteen: Record<number, CartItem[]> = {};
+    for (const item of cart) {
+      const cid = item.canteen_id || products.find(p => p.id === item.id)?.canteen_id || 1;
+      if (!ordersByCanteen[cid]) ordersByCanteen[cid] = [];
+      ordersByCanteen[cid].push(item);
+    }
     
     try {
-      const res = await fetch('/api/orders', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          user_name: currentUser?.name || 'Aluno',
-          user_id: currentUser?.id,
-          items: cart,
-          total: total,
-          canteen_id: selectedCanteen?.id || 1
-        })
-      });
-      
-      const data = await res.json();
-      if (res.ok && data.success) {
-        setOrderCode(data.code);
-        setCart([]);
-        goTo('confirmacao');
-        fetchProducts();
-      } else {
-        showToast(data.error || 'Erro ao finalizar pedido.');
+      let createdCodes: string[] = [];
+      for (const [cidStr, items] of Object.entries(ordersByCanteen)) {
+        const canteen_id = parseInt(cidStr);
+        const total = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+
+        const res = await fetch('/api/orders', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
+          body: JSON.stringify({
+            user_name: currentUser?.name || 'Aluno',
+            user_id: currentUser?.id,
+            items: items,
+            total: total,
+            canteen_id: canteen_id,
+            coupon_code: appliedCoupon && appliedCoupon.canteen_id === canteen_id ? appliedCoupon.code : undefined
+          })
+        });
+        
+        const data = await res.json();
+        if (res.ok && data.success) {
+           createdCodes.push(data.code);
+        } else {
+           throw new Error(data.error || 'Erro ao finalizar pedido.');
+        }
       }
-    } catch (err) {
-      showToast('Erro de conexão com o servidor.');
+
+      setOrderCode(createdCodes.join(', '));
+      updateCart([]);
+      setAppliedCoupon(null);
+      setCouponCodeState('');
+      goTo('confirmacao');
+      fetchProducts();
+    } catch (err: any) {
+      showToast(err.message || 'Erro de conexão com o servidor.');
     }
   };
 
@@ -718,7 +839,7 @@ export default function App() {
           {currentScreen === 'esqueci-senha' && <ScreenEsqueciSenha goTo={goTo} />}
           {currentScreen === 'cantinas' && <ScreenCantinas goTo={goTo} canteens={canteens} setSelectedCanteen={setSelectedCanteen} />}
           {currentScreen === 'catalogo' && <ScreenCatalogo goTo={goTo} addToCart={addToCart} products={products} selectedCanteen={selectedCanteen} categories={categories} tags={tags} />}
-          {currentScreen === 'carrinho' && <ScreenCarrinho goTo={goTo} cart={cart} changeQty={changeQty} clearCart={clearCart} finalizarPedido={finalizarPedido} />}
+          {currentScreen === 'carrinho' && <ScreenCarrinho goBack={handleGoBackFromCart} cart={cart} changeQty={changeQty} clearCart={clearCart} finalizarPedido={finalizarPedido} couponCodeState={couponCodeState} setCouponCodeState={setCouponCodeState} handleApplyCoupon={handleApplyCoupon} appliedCoupon={appliedCoupon} couponError={couponError} setCouponError={setCouponError} />}
           {currentScreen === 'confirmacao' && <ScreenConfirmacao goTo={goTo} orderCode={orderCode} />}
           {currentScreen === 'status' && <ScreenStatus goTo={goTo} orderCode={orderCode} />}
           {currentScreen === 'meus-pedidos' && <ScreenMeusPedidos goTo={goTo} currentUser={currentUser} setOrderCode={setOrderCode} showToast={showToast} fetchCanteens={fetchCanteens} />}
@@ -1221,23 +1342,25 @@ function ScreenEsqueciSenha({ goTo }: { goTo: (s: Screen) => void }) {
   );
 }
 
+export const isCanteenOpen = (canteen: Canteen) => {
+  const now = new Date();
+  const currentHour = now.getHours();
+  const currentMinute = now.getMinutes();
+  const currentTime = currentHour * 60 + currentMinute;
+
+  const [openH, openM] = canteen.open_time.split(':').map(Number);
+  const [closeH, closeM] = canteen.close_time.split(':').map(Number);
+  const openTime = openH * 60 + openM;
+  const closeTime = closeH * 60 + closeM;
+
+  if (closeTime < openTime) {
+    return currentTime >= openTime || currentTime <= closeTime;
+  }
+  return currentTime >= openTime && currentTime <= closeTime;
+};
+
 function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Screen) => void, canteens: Canteen[], setSelectedCanteen: (c: Canteen) => void }) {
-  const isCanteenOpen = (canteen: Canteen) => {
-    const now = new Date();
-    const currentHour = now.getHours();
-    const currentMinute = now.getMinutes();
-    const currentTime = currentHour * 60 + currentMinute;
 
-    const [openH, openM] = canteen.open_time.split(':').map(Number);
-    const [closeH, closeM] = canteen.close_time.split(':').map(Number);
-    const openTime = openH * 60 + openM;
-    const closeTime = closeH * 60 + closeM;
-
-    if (closeTime < openTime) {
-      return currentTime >= openTime || currentTime <= closeTime;
-    }
-    return currentTime >= openTime && currentTime <= closeTime;
-  };
 
   return (
     <div className="page">
@@ -1506,8 +1629,16 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
   );
 }
 
-function ScreenCarrinho({ goTo, cart, changeQty, clearCart, finalizarPedido }: { goTo: (s: Screen) => void, cart: CartItem[], changeQty: (i: number, d: number) => void, clearCart: () => void, finalizarPedido: () => void }) {
+function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, couponCodeState, setCouponCodeState, handleApplyCoupon, appliedCoupon, couponError, setCouponError }: { goBack: () => void, cart: CartItem[], changeQty: (i: number, d: number) => void, clearCart: () => void, finalizarPedido: () => void, couponCodeState: string, setCouponCodeState: (s: string) => void, handleApplyCoupon: (c: string) => void, appliedCoupon: any, couponError: string, setCouponError: (e: string) => void }) {
   const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+  
+  let discountAmount = 0;
+  if (appliedCoupon) {
+    const applicableItems = cart.filter(item => item.canteen_id === appliedCoupon.canteen_id || (!item.canteen_id && appliedCoupon.canteen_id === 1));
+    const applicableTotal = applicableItems.reduce((sum, i) => sum + i.price * i.qty, 0);
+    discountAmount = applicableTotal * (appliedCoupon.discount_pct / 100);
+  }
+  const finalTotal = Math.max(0, total - discountAmount);
 
   return (
     <div className="page">
@@ -1531,9 +1662,9 @@ function ScreenCarrinho({ goTo, cart, changeQty, clearCart, finalizarPedido }: {
                     </div>
                   </div>
                   <div className="qty-ctrl">
-                    <button className="qty-btn" onClick={() => changeQty(idx, -1)}>−</button>
+                    <button className="qty-btn" style={{ background: '#e2e8f0', color: '#1e293b' }} onClick={() => changeQty(idx, -1)}>−</button>
                     <strong>{item.qty}</strong>
-                    <button className="qty-btn" onClick={() => changeQty(idx, 1)}>+</button>
+                    <button className="qty-btn" style={{ background: '#e2e8f0', color: '#1e293b' }} onClick={() => changeQty(idx, 1)}>+</button>
                   </div>
                   <strong style={{ minWidth: 64, textAlign: 'right', color: 'var(--success)' }}>
                     {item.price === 0 ? 'Grátis' : `R$ ${(item.price * item.qty).toFixed(2).replace('.', ',')}`}
@@ -1543,7 +1674,7 @@ function ScreenCarrinho({ goTo, cart, changeQty, clearCart, finalizarPedido }: {
             )}
           </div>
           <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-            <button className="btn-secondary btn-sm" onClick={() => goTo('catalogo')}>← Continuar comprando</button>
+            <button className="btn-secondary btn-sm" onClick={goBack}>← Voltar</button>
             <button className="btn-danger btn-sm" onClick={clearCart}>🗑 Limpar carrinho</button>
           </div>
         </div>
@@ -1558,9 +1689,60 @@ function ScreenCarrinho({ goTo, cart, changeQty, clearCart, finalizarPedido }: {
                 </div>
               ))}
             </div>
-            <div className="summary-total">
-              <span>Total</span>
-              <span style={{ color: 'var(--success)' }}>R$ {total.toFixed(2).replace('.', ',')}</span>
+            
+            <div style={{ marginTop: 24, padding: '16px', background: 'var(--background)', borderRadius: '12px' }}>
+              <p style={{ fontSize: 13, fontWeight: 600, marginBottom: 8 }}>Cupom de Desconto</p>
+              
+              {!appliedCoupon ? (
+                <>
+                  <div style={{ display: 'flex', gap: 8 }}>
+                    <input 
+                      type="text" 
+                      value={couponCodeState} 
+                      onChange={e => {
+                        setCouponCodeState(e.target.value.toUpperCase());
+                        if (couponError) setCouponError('');
+                      }}
+                      placeholder="Seu cupom..."
+                      style={{ flex: 1, padding: '8px 12px', borderRadius: '8px', border: `1px solid ${couponError ? 'red' : '#e2e8f0'}`, outline: 'none' }}
+                    />
+                    <button className="btn-outline btn-sm" onClick={() => handleApplyCoupon(couponCodeState)}>Aplicar</button>
+                  </div>
+                  {couponError && (
+                     <p style={{ marginTop: 8, fontSize: 13, color: 'red', display: 'flex', alignItems: 'center' }}>
+                        ❌ {couponError}
+                     </p>
+                  )}
+                </>
+              ) : (
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', background: '#ecfdf5', borderRadius: '8px', border: '1px solid #a7f3d0' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 18 }}>🎟️</span>
+                    <div>
+                      <p style={{ fontSize: 14, fontWeight: 600, color: '#065f46', margin: 0 }}>{appliedCoupon.code}</p>
+                      <p style={{ fontSize: 13, color: '#059669', margin: 0 }}>{appliedCoupon.discount_pct}% OFF aplicado!</p>
+                    </div>
+                  </div>
+                  <button className="btn-outline btn-sm" style={{ borderColor: 'transparent', color: '#ef4444', padding: '4px 8px' }} onClick={() => handleApplyCoupon('')}>Remover</button>
+                </div>
+              )}
+            </div>
+
+            <div style={{ marginTop: '24px', borderTop: '2px dashed #e2e8f0', paddingTop: '16px' }}>
+              <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', color: 'var(--muted)' }}>
+                <span>Subtotal</span>
+                <span>R$ {total.toFixed(2).replace('.', ',')}</span>
+              </div>
+              {appliedCoupon && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', color: 'var(--success)', fontWeight: 500 }}>
+                  <span>Desconto</span>
+                  <span>- R$ {discountAmount.toFixed(2).replace('.', ',')}</span>
+                </div>
+              )}
+              <div className="summary-total" style={{ marginTop: '8px', borderTop: 'none', paddingTop: 0 }}>
+                <span>Total</span>
+                <span style={{ color: 'var(--success)' }}>R$ {finalTotal.toFixed(2).replace('.', ',')}</span>
+              </div>
             </div>
             <button className="btn-orange btn-full" style={{ marginTop: 20 }} onClick={finalizarPedido}>
               ✅ Finalizar Pedido
@@ -1573,22 +1755,23 @@ function ScreenCarrinho({ goTo, cart, changeQty, clearCart, finalizarPedido }: {
 }
 
 function ScreenConfirmacao({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCode: string }) {
+  const isMultiple = orderCode.includes(',');
   return (
     <div className="page" style={{ maxWidth: 600 }}>
       <div className="card" style={{ textAlign: 'center', padding: 40 }}>
         <div style={{ fontSize: 56, marginBottom: 16 }}>🎉</div>
-        <div className="tag tag-success">Pedido Confirmado!</div>
-        <h2 style={{ margin: '16px 0 8px' }}>Seu pedido foi enviado para a cantina</h2>
-        <p style={{ color: 'var(--muted)', marginBottom: 28 }}>Apresente o QR Code abaixo na hora da retirada</p>
+        <div className="tag tag-success">{isMultiple ? 'Pedidos Confirmados!' : 'Pedido Confirmado!'}</div>
+        <h2 style={{ margin: '16px 0 8px' }}>{isMultiple ? 'Seus pedidos foram enviados' : 'Seu pedido foi enviado para a cantina'}</h2>
+        <p style={{ color: 'var(--muted)', marginBottom: 28 }}>{isMultiple ? 'Apresente os códigos abaixo na hora da retirada' : 'Apresente o QR Code abaixo na hora da retirada'}</p>
         <div className="qr-box">📱</div>
         <div style={{ margin: '16px 0', fontSize: 22, fontWeight: 'bold', letterSpacing: 4, color: 'var(--orange)' }}>
           {orderCode}
         </div>
         <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 28 }}>
-          Guarde este código — ele é único para o seu pedido
+          {isMultiple ? 'Guarde estes códigos — eles são únicos para os seus pedidos' : 'Guarde este código — ele é único para o seu pedido'}
         </p>
-        <button className="btn-orange btn-full" onClick={() => goTo('status')}>
-          📍 Acompanhar Status do Pedido
+        <button className="btn-orange btn-full" onClick={() => goTo(isMultiple ? 'meus-pedidos' : 'status')}>
+          📍 {isMultiple ? 'Acompanhar Meus Pedidos' : 'Acompanhar Status do Pedido'}
         </button>
       </div>
     </div>
@@ -1831,9 +2014,12 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
 }
 
 function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, canteens, fetchCanteens, categories, fetchCategories, fetchTags }: { products: Product[], tags: Tag[], currentUser: User | null, fetchProducts: () => void, showToast: (msg: string) => void, canteens: Canteen[], fetchCanteens: () => void, categories: Category[], fetchCategories: () => void, fetchTags: () => void }) {
-  const [activeTab, setActiveTab] = useState<'pedidos' | 'produtos' | 'cardapio' | 'config'>('pedidos');
+  const [activeTab, setActiveTab] = useState<'pedidos' | 'produtos' | 'cardapio' | 'config' | 'cupons'>('pedidos');
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderFilter, setOrderFilter] = useState<string>('todos');
+  const [orderDateFilter, setOrderDateFilter] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [orderSortMethod, setOrderSortMethod] = useState<'desc' | 'asc'>('desc');
+  const [orderSearchQuery, setOrderSearchQuery] = useState<string>('');
   
   // Settings state
   const myCanteen = canteens.find(c => Number(c.id) === Number(currentUser?.canteen_id)) || canteens[0] || null;
@@ -1867,7 +2053,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     try {
       await fetch(`/api/canteens/${myCanteen.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
         body: JSON.stringify({ 
           name: canteenName,
           desc: canteenDesc,
@@ -1910,6 +2096,113 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   const [isAddingCat, setIsAddingCat] = useState(false);
   const [deleteCatConfirmId, setDeleteCatConfirmId] = useState<number | null>(null);
 
+  // Coupons management
+  const [coupons, setCoupons] = useState<Coupon[]>([]);
+  const [formCouponCode, setFormCouponCode] = useState('');
+  const [formCouponPct, setFormCouponPct] = useState('');
+  const [formCouponUses, setFormCouponUses] = useState('');
+  const [formCouponDate, setFormCouponDate] = useState('');
+  const [formCouponMinVal, setFormCouponMinVal] = useState('');
+  const [isAddingCoupon, setIsAddingCoupon] = useState(false);
+  const [editingCouponId, setEditingCouponId] = useState<number | null>(null);
+  const [deleteCouponId, setDeleteCouponId] = useState<number | null>(null);
+
+  const handleEditCoupon = (coupon: Coupon) => {
+    setFormCouponCode(coupon.code);
+    setFormCouponPct(coupon.discount_pct.toString());
+    setFormCouponUses(coupon.max_uses ? coupon.max_uses.toString() : '');
+    setFormCouponDate(coupon.expires_at ? coupon.expires_at.split('T')[0] : '');
+    setFormCouponMinVal(coupon.min_value ? coupon.min_value.toString() : '');
+    setEditingCouponId(coupon.id);
+    setIsAddingCoupon(true);
+  };
+
+  const fetchCoupons = async () => {
+    try {
+      const res = await fetch('/api/coupons', { headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
+      if (res.ok) {
+        setCoupons(await res.json());
+      }
+    } catch(err) {
+      console.error(err);
+    }
+  };
+
+  useEffect(() => {
+    if (activeTab === 'cupons') fetchCoupons();
+  }, [activeTab]);
+
+  const handleSaveCoupon = async () => {
+    if (!formCouponCode || !formCouponPct) {
+      showToast('Preencha código e desconto.');
+      return;
+    }
+    
+    let expiresAt = null;
+    if (formCouponDate) {
+      expiresAt = formCouponDate + 'T23:59:59.999Z';
+    }
+
+    const isEditing = editingCouponId !== null;
+    const url = isEditing ? `/api/coupons/${editingCouponId}` : '/api/coupons';
+    const method = isEditing ? 'PUT' : 'POST';
+
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
+        body: JSON.stringify({
+          code: formCouponCode.toUpperCase(),
+          discount_pct: parseFloat(formCouponPct),
+          max_uses: formCouponUses ? parseInt(formCouponUses) : null,
+          expires_at: expiresAt,
+          canteen_id: myCanteen?.id,
+          active: isEditing ? coupons.find(c => c.id === editingCouponId)?.active : 1,
+          min_value: formCouponMinVal ? parseFloat(formCouponMinVal) : 0
+        })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        showToast(isEditing ? '🎟️ Cupom atualizado!' : '🎟️ Cupom criado!');
+        setIsAddingCoupon(false);
+        setEditingCouponId(null);
+        setFormCouponCode('');
+        setFormCouponPct('');
+        setFormCouponUses('');
+        setFormCouponDate('');
+        fetchCoupons();
+      } else {
+        showToast(data.error || 'Erro ao salvar cupom.');
+      }
+    } catch {
+      showToast('Erro ao salvar cupom.');
+    }
+  };
+
+  const handleDeleteCoupon = async (id: number) => {
+    try {
+      await fetch(`/api/coupons/${id}`, { method: 'DELETE', headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
+      showToast('🗑️ Cupom excluído!');
+      setDeleteCouponId(null);
+      fetchCoupons();
+    } catch {
+      showToast('Erro ao excluir cupom.');
+    }
+  };
+
+  const toggleCouponStatus = async (coupon: Coupon) => {
+    try {
+      await fetch(`/api/coupons/${coupon.id}`, { 
+        method: 'PUT', 
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
+        body: JSON.stringify({ active: coupon.active ? 0 : 1 })
+      });
+      fetchCoupons();
+    } catch {
+      showToast('Erro ao atualizar cupom.');
+    }
+  };
+
   useEffect(() => {
     if (categories.length > 0 && !formCat) {
       setFormCat(categories[0].name);
@@ -1921,7 +2214,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     try {
       const res = await fetch('/api/categories', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
         body: JSON.stringify({ name: newCatName.toLowerCase() })
       });
       if (res.ok) {
@@ -1939,7 +2232,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
 
   const handleDeleteCategory = async (id: number) => {
     try {
-      const res = await fetch(`/api/categories/${id}`, { method: 'DELETE' });
+      const res = await fetch(`/api/categories/${id}`, { method: 'DELETE', headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
       if (res.ok) {
         showToast('🗑️ Categoria excluída!');
         setDeleteCatConfirmId(null);
@@ -2002,14 +2295,14 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
       if (editingId) {
         await fetch(`/api/products/${editingId}`, {
           method: 'PUT',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
           body: JSON.stringify(payload)
         });
         showToast('✅ Produto atualizado!');
       } else {
         await fetch('/api/products', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
           body: JSON.stringify(payload)
         });
         showToast('✅ Produto adicionado!');
@@ -2023,14 +2316,19 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
 
   const handleToggleStatus = async (p: Product) => {
     try {
-      await fetch(`/api/products/${p.id}`, {
+      const res = await fetch(`/api/products/${p.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
         body: JSON.stringify({ ...p, active: p.active === 1 ? 0 : 1 })
       });
+      if (!res.ok) {
+         const data = await res.json();
+         showToast(`Erro: ${data.error}`);
+         return;
+      }
       fetchProducts();
-    } catch (err) {
-      showToast('Erro ao alterar status.');
+    } catch (err: any) {
+      showToast(`Erro ao alterar status: ${err.message}`);
     }
   };
 
@@ -2039,7 +2337,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
 
   const handleDelete = async (id: number) => {
     try {
-      await fetch(`/api/products/${id}`, { method: 'DELETE' });
+      await fetch(`/api/products/${id}`, { method: 'DELETE', headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
       showToast('🗑️ Produto excluído!');
       fetchProducts();
       setDeleteConfirmId(null);
@@ -2050,7 +2348,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
 
   const handleDeleteOrder = async (id: number) => {
     try {
-      await fetch(`/api/orders/${id}`, { method: 'DELETE' });
+      await fetch(`/api/orders/${id}`, { method: 'DELETE', headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
       showToast('🗑️ Pedido excluído!');
       fetchOrders();
       setDeleteOrderConfirmId(null);
@@ -2063,7 +2361,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
 
   const fetchOrders = async () => {
     try {
-      const res = await fetch('/api/orders');
+      const res = await fetch('/api/orders', { headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
       if (res.ok) {
         const data = await res.json();
         
@@ -2087,7 +2385,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     try {
       await fetch(`/api/orders/${id}/status`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
         body: JSON.stringify({ status })
       });
       fetchOrders();
@@ -2119,6 +2417,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
         <button className={`gestor-tab ${activeTab === 'pedidos' ? 'active' : ''}`} onClick={() => setActiveTab('pedidos')}>📋 Pedidos</button>
         <button className={`gestor-tab ${activeTab === 'produtos' ? 'active' : ''}`} onClick={() => setActiveTab('produtos')}>🥘 Produtos</button>
         <button className={`gestor-tab ${activeTab === 'cardapio' ? 'active' : ''}`} onClick={() => setActiveTab('cardapio')}>📝 Cardápio</button>
+        <button className={`gestor-tab ${activeTab === 'cupons' ? 'active' : ''}`} onClick={() => setActiveTab('cupons')}>🎟️ Cupons</button>
         <button className={`gestor-tab ${activeTab === 'config' ? 'active' : ''}`} onClick={() => setActiveTab('config')}>⚙️ Configurações</button>
       </div>
 
@@ -2189,13 +2488,119 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
         </div>
       )}
 
+      {activeTab === 'cupons' && (
+        <div className="gestor-panel active">
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
+            <h3>Cupons de Desconto</h3>
+            <button className="btn-orange btn-sm" onClick={() => setIsAddingCoupon(true)}>+ Novo Cupom</button>
+          </div>
+
+          {isAddingCoupon && (
+            <div className="card" style={{ marginBottom: 20 }}>
+              <h4 style={{ marginBottom: 12 }}>{editingCouponId ? 'Editar Cupom' : 'Criar Cupom'}</h4>
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+                <div>
+                  <label style={{ display: 'block', fontSize: 13, marginBottom: 4, fontWeight: 500 }}>Código <span style={{ color: 'red' }}>*</span></label>
+                  <input type="text" value={formCouponCode} onChange={e => setFormCouponCode(e.target.value.toUpperCase())} placeholder="EX: VERAO20" className="w-full" style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 8 }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 13, marginBottom: 4, fontWeight: 500 }}>Desconto (%) <span style={{ color: 'red' }}>*</span></label>
+                  <input type="number" min="1" max="100" value={formCouponPct} onChange={e => setFormCouponPct(e.target.value)} placeholder="15" className="w-full" style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 8 }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 13, marginBottom: 4, fontWeight: 500 }}>Uso Máximo (Opcional)</label>
+                  <input type="number" min="1" value={formCouponUses} onChange={e => setFormCouponUses(e.target.value)} placeholder="Vezes (deixe em branco p/ ∞)" className="w-full" style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 8 }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 13, marginBottom: 4, fontWeight: 500 }}>Data Limite (Opcional)</label>
+                  <input type="date" value={formCouponDate} onChange={e => setFormCouponDate(e.target.value)} className="w-full" style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 8 }} />
+                </div>
+                <div>
+                  <label style={{ display: 'block', fontSize: 13, marginBottom: 4, fontWeight: 500 }}>Valor Mínimo (Opcional)</label>
+                  <input type="number" min="0" step="0.01" value={formCouponMinVal} onChange={e => setFormCouponMinVal(e.target.value)} placeholder="0.00" className="w-full" style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 8 }} />
+                </div>
+              </div>
+              <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
+                <button className="btn-outline btn-sm" onClick={() => { setIsAddingCoupon(false); setEditingCouponId(null); }}>Cancelar</button>
+                <button className="btn-orange btn-sm" onClick={handleSaveCoupon}>Salvar Cupom</button>
+              </div>
+            </div>
+          )}
+
+          <div className="product-list" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {coupons.map(coupon => (
+              <div key={coupon.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px' }}>
+                <div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
+                    <span style={{ fontWeight: 'bold', fontSize: 16 }}>{coupon.code}</span>
+                    <span className="tag tag-success">{coupon.discount_pct}% OFF</span>
+                    {!coupon.active && <span className="tag" style={{ background: '#fef2f2', color: '#ef4444' }}>Inativo</span>}
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                    <span>Usos: {coupon.used_count} {coupon.max_uses ? `/ ${coupon.max_uses}` : ''}</span>
+                    <span>Validade: {coupon.expires_at ? new Date(coupon.expires_at).toLocaleDateString('pt-BR') : 'Sem validade'}</span>
+                    {coupon.min_value > 0 && <span>Mínimo: R$ {coupon.min_value.toFixed(2).replace('.', ',')}</span>}
+                  </div>
+                </div>
+                
+                <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                  <button className="btn-outline btn-sm" onClick={() => handleEditCoupon(coupon)}>✏️</button>
+                  <button className="btn-outline btn-sm" onClick={() => toggleCouponStatus(coupon)}>
+                    {coupon.active ? 'Apenas Desativar' : 'Reativar'}
+                  </button>
+                  {deleteCouponId === coupon.id ? (
+                    <div style={{ display: 'flex', gap: 4 }}>
+                      <button className="btn-orange btn-sm" onClick={() => handleDeleteCoupon(coupon.id)}>Confirma?</button>
+                      <button className="btn-outline btn-sm" onClick={() => setDeleteCouponId(null)}>x</button>
+                    </div>
+                  ) : (
+                    <button className="btn-outline btn-sm" onClick={() => setDeleteCouponId(coupon.id)} style={{ color: 'red', borderColor: 'red' }}>Excluir</button>
+                  )}
+                </div>
+              </div>
+            ))}
+            
+            {coupons.length === 0 && !isAddingCoupon && (
+              <div style={{ textAlign: 'center', padding: 40, background: 'var(--surface)', borderRadius: 16 }}>
+                <p style={{ color: 'var(--muted)' }}>Nenhum cupom criado.</p>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
       {activeTab === 'pedidos' && (
         <div className="gestor-panel active">
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+            <span style={{ fontSize: 14, fontWeight: 500 }}>Filtros:</span>
+            <input 
+              type="text" 
+              placeholder="Buscar por cliente ou pedido..."
+              value={orderSearchQuery}
+              onChange={e => setOrderSearchQuery(e.target.value)}
+              style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', fontSize: 14, minWidth: 200 }}
+            />
+            <input 
+              type="date" 
+              value={orderDateFilter} 
+              onChange={e => setOrderDateFilter(e.target.value)} 
+              style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', fontSize: 14 }}
+            />
+            <button className="btn-outline btn-sm" onClick={() => setOrderDateFilter('')}>Limpar Data</button>
+            <button 
+              className="btn-outline btn-sm" 
+              onClick={() => setOrderSortMethod(prev => prev === 'desc' ? 'asc' : 'desc')}
+            >
+               Ordenação: {orderSortMethod === 'desc' ? 'Recentes Primeiro ↓' : 'Antigos Primeiro ↑'}
+            </button>
+          </div>
           <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
             <button className={`btn-sm ${orderFilter === 'todos' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('todos')}>Todos</button>
             <button className={`btn-sm ${orderFilter === 'aguardando' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('aguardando')}>Aguardando</button>
             <button className={`btn-sm ${orderFilter === 'preparo' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('preparo')}>Em Preparo</button>
             <button className={`btn-sm ${orderFilter === 'pronto' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('pronto')}>Pronto</button>
+            <button className={`btn-sm ${orderFilter === 'retirado' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('retirado')}>Retirado</button>
+            <button className={`btn-sm ${orderFilter === 'cancelado' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('cancelado')}>Cancelados</button>
           </div>
           <div className="orders-list">
             {orders.length === 0 ? (
@@ -2203,8 +2608,21 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
             ) : (
               orders
                 .filter(o => Number(o.canteen_id || 1) === Number(myCanteen?.id))
+                .filter(o => {
+                  if (!orderSearchQuery) return true;
+                  const q = orderSearchQuery.toLowerCase();
+                  return o.code.toLowerCase().includes(q) || o.user_name.toLowerCase().includes(q);
+                })
+                .filter(o => {
+                  if (!orderDateFilter) return true;
+                  return o.created_at.startsWith(orderDateFilter);
+                })
                 .filter(o => orderFilter === 'todos' || o.status === orderFilter)
-                .sort((a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime())
+                .sort((a, b) => {
+                  const tA = new Date(a.created_at).getTime();
+                  const tB = new Date(b.created_at).getTime();
+                  return orderSortMethod === 'desc' ? tB - tA : tA - tB;
+                })
                 .map(order => {
                   const items: CartItem[] = JSON.parse(order.items);
                   const itemsText = items.map(i => `${i.name} × ${i.qty}`).join(' + ');
@@ -2405,7 +2823,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                     try {
                       const res = await fetch('/api/tags', {
                         method: 'POST',
-                        headers: { 'Content-Type': 'application/json' },
+                        headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
                         body: JSON.stringify({ name: newTagName, color: newTagColor, canteen_id: myCanteen.id })
                       });
                       if (res.ok) {
@@ -2494,7 +2912,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                 <button className="btn-secondary" onClick={() => setDeleteTagConfirmId(null)}>Cancelar</button>
                 <button className="btn-danger" onClick={async () => {
                   try {
-                    const res = await fetch(`/api/tags/${deleteTagConfirmId}`, { method: 'DELETE' });
+                    const res = await fetch(`/api/tags/${deleteTagConfirmId}`, { method: 'DELETE', headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
                     if (res.ok) {
                       showToast('🗑️ Tag excluída!');
                       setDeleteTagConfirmId(null);
