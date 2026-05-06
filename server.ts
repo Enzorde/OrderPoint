@@ -11,11 +11,11 @@ import nodemailer from "nodemailer";
 let transporter: nodemailer.Transporter;
 async function initMailer() {
   if (process.env.SMTP_USER && process.env.SMTP_PASS) {
-    // Configuração real para Outlook / Office 365
+    
     transporter = nodemailer.createTransport({
       host: "smtp.office365.com",
       port: 587,
-      secure: false, // true for 465, false for other ports
+      secure: false, 
       requireTLS: true,
       auth: {
         user: process.env.SMTP_USER,
@@ -24,7 +24,7 @@ async function initMailer() {
     });
     console.log("Real Outlook SMTP initialized.");
   } else {
-    // Fallback para Ethereal (Testes)
+
     const testAccount = await nodemailer.createTestAccount();
     transporter = nodemailer.createTransport({
       host: "smtp.ethereal.email",
@@ -265,6 +265,22 @@ class DatabaseManager {
         name TEXT UNIQUE NOT NULL
       )
     `);
+
+    // Coupons
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS coupons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE NOT NULL,
+        discount_pct REAL NOT NULL,
+        max_uses INTEGER DEFAULT NULL,
+        used_count INTEGER DEFAULT 0,
+        expires_at DATETIME DEFAULT NULL,
+        min_value REAL DEFAULT 0,
+        canteen_id INTEGER NOT NULL,
+        active INTEGER DEFAULT 1
+      )
+    `);
+    try { this.db.exec("ALTER TABLE coupons ADD COLUMN min_value REAL DEFAULT 0"); } catch (e) {}
   }
 
   private seedData() {
@@ -284,7 +300,7 @@ class DatabaseManager {
     const canteensCount = this.db.prepare('SELECT COUNT(*) as count FROM canteens').get() as any;
     if (canteensCount.count === 0) {
       const insertCanteen = this.db.prepare('INSERT INTO canteens (name, desc, location, emoji, color, open_time, close_time) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      insertCanteen.run('Cantina Central', 'Salgados, lanches e bebidas para o dia a dia', 'Prédio Principal', '🍕', '#fff8f0', '08:00', '18:00');
+      insertCanteen.run('Cantina Central', 'Salgados, lanches e bebidas para o dia a dia', 'Prédio Principal', '🍕', '#fff8f0', '08:00', '22:30');
       insertCanteen.run('Cantina do Bloco B', 'Refeições completas e opções saudáveis', 'Bloco B', '🥗', '#f0f7ff', '08:00', '22:00');
       insertCanteen.run('Cafeteria Leste', 'Cafés, sucos e snacks rápidos', 'Prédio Leste', '☕', '#f5f7fb', '08:00', '23:00');
     }
@@ -367,6 +383,21 @@ class DatabaseManager {
 // ============================================================================
 // Controllers
 // ============================================================================
+
+// Controller Helper
+function checkGestor(req: Request, res: Response, db: DatabaseSync): boolean {
+  const userIdHeader = req.headers['x-user-id'] as string;
+  if (!userIdHeader) {
+     res.status(401).json({ error: "Não autorizado." });
+     return false;
+  }
+  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(userIdHeader) as any;
+  if (!user || user.role !== 'manager') {
+     res.status(403).json({ error: "Acesso negado." });
+     return false;
+  }
+  return true;
+}
 
 class BaseController {
   protected db: DatabaseSync;
@@ -715,10 +746,9 @@ class UserController extends BaseController {
         if (!user || user.points < product.points_price) throw new Error("Pontos insuficientes.");
         if (product.stock <= 0) throw new Error("Produto esgotado no estoque.");
 
-        this.db.prepare('UPDATE users SET points = points - ? WHERE id = ?').run(product.points_price, userId);
-        
         this.db.exec('COMMIT');
-        res.json({ success: true, newPoints: user.points - product.points_price, product: { ...product, price: 0, isReward: true } });
+        // Fake the newPoints just for UI immediate update, the real deduction happens at checkout
+        res.json({ success: true, newPoints: user.points - product.points_price, product: { ...product, price: 0, isReward: true, points_price: product.points_price } });
     } catch(err: any) {
         this.db.exec('ROLLBACK');
         res.status(400).json({ error: err.message });
@@ -778,6 +808,7 @@ class ProductController extends BaseController {
   }
 
   private create(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
     const { name, desc, price, emoji, cat, stock, points_price, canteen_id, tags } = req.body;
     if (!name || !price || !cat) return res.status(400).json({ error: "Dados incompletos." });
     try {
@@ -790,6 +821,7 @@ class ProductController extends BaseController {
   }
 
   private update(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
     const { name, desc, price, emoji, cat, active, stock, points_price, canteen_id, tags } = req.body;
     try {
       const update = this.db.prepare('UPDATE products SET name=?, desc=?, price=?, emoji=?, cat=?, active=?, stock=?, points_price=?, canteen_id=?, tags=? WHERE id=?');
@@ -801,6 +833,7 @@ class ProductController extends BaseController {
   }
 
   private delete(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
     try {
       const del = this.db.prepare('DELETE FROM products WHERE id=?');
       del.run(parseInt(req.params.id, 10));
@@ -848,6 +881,7 @@ class CanteenController extends BaseController {
   }
 
   private update(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
     const { name, desc, location, emoji, color, open_time, close_time, points_enabled } = req.body;
     try {
       const update = this.db.prepare('UPDATE canteens SET name=?, desc=?, location=?, emoji=?, color=?, open_time=?, close_time=?, points_enabled=? WHERE id=?');
@@ -855,6 +889,109 @@ class CanteenController extends BaseController {
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Erro ao atualizar cantina." });
+    }
+  }
+}
+
+class CouponController extends BaseController {
+  constructor(db: DatabaseSync, app: express.Application) {
+    super(db, app);
+  }
+
+  public registerRoutes() {
+    this.app.get("/api/coupons", this.getAll.bind(this));
+    this.app.post("/api/coupons", this.create.bind(this));
+    this.app.post("/api/coupons/validate", this.validateCoupon.bind(this));
+    this.app.put("/api/coupons/:id", this.update.bind(this));
+    this.app.delete("/api/coupons/:id", this.delete.bind(this));
+  }
+
+  private getAll(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
+    const userIdHeader = req.headers['x-user-id'] as string;
+    const user = this.db.prepare('SELECT canteen_id FROM users WHERE id = ?').get(userIdHeader) as any;
+    try {
+      let coupons;
+      if (user && user.canteen_id) {
+        coupons = this.db.prepare('SELECT * FROM coupons WHERE canteen_id = ?').all(user.canteen_id);
+      } else {
+        coupons = this.db.prepare('SELECT * FROM coupons').all();
+      }
+      res.json(coupons);
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao buscar cupons." });
+    }
+  }
+
+  private validateCoupon(req: Request, res: Response) {
+    const { code, canteen_id, cart_total } = req.body;
+    if (!code || !canteen_id) return res.status(400).json({ error: "Código ou cantina não informados." });
+    try {
+      const coupon = this.db.prepare('SELECT * FROM coupons WHERE code = ? AND canteen_id = ? AND active = 1').get(code, canteen_id) as any;
+      if (!coupon) return res.status(404).json({ error: "Cupom inválido." });
+      
+      if (coupon.max_uses !== null && coupon.used_count >= coupon.max_uses) {
+        return res.status(400).json({ error: "Cupom esgotado." });
+      }
+      
+      if (coupon.expires_at && new Date(coupon.expires_at) < new Date()) {
+        return res.status(400).json({ error: "Cupom expirado." });
+      }
+      
+      if (coupon.min_value > 0 && cart_total !== undefined) {
+         if (cart_total < coupon.min_value) {
+           return res.status(400).json({ error: `Valor mínimo da cantina é R$ ${coupon.min_value.toFixed(2).replace('.', ',')}` });
+         }
+      }
+      
+      res.json({ success: true, coupon });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao validar cupom." });
+    }
+  }
+
+  private create(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
+    const { code, discount_pct, max_uses, expires_at, canteen_id, min_value } = req.body;
+    if (!code || !discount_pct || !canteen_id) return res.status(400).json({ error: "Dados obrigatórios faltando." });
+    try {
+      const insert = this.db.prepare('INSERT INTO coupons (code, discount_pct, max_uses, expires_at, min_value, canteen_id) VALUES (?, ?, ?, ?, ?, ?)');
+      insert.run(code, discount_pct, max_uses || null, expires_at || null, min_value || 0, canteen_id);
+      res.json({ success: true });
+    } catch (error: any) {
+      if (error.message && error.message.includes("UNIQUE constraint failed")) {
+        res.status(400).json({ error: "Um cupom com este código já existe." });
+      } else {
+        res.status(500).json({ error: "Erro ao criar cupom." });
+      }
+    }
+  }
+
+  private update(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
+    const { code, discount_pct, max_uses, expires_at, active, min_value } = req.body;
+    try {
+      if (code && discount_pct) {
+         const update = this.db.prepare('UPDATE coupons SET code = ?, discount_pct = ?, max_uses = ?, expires_at = ?, min_value = ?, active = ? WHERE id = ?');
+         update.run(code, discount_pct, max_uses || null, expires_at || null, min_value || 0, active !== undefined ? active : 1, req.params.id);
+      } else {
+         const update = this.db.prepare('UPDATE coupons SET active = ?, max_uses = ?, expires_at = ? WHERE id = ?');
+         update.run(active !== undefined ? active : 1, max_uses || null, expires_at || null, req.params.id);
+      }
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao atualizar cupom." });
+    }
+  }
+
+  private delete(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
+    try {
+      const del = this.db.prepare('DELETE FROM coupons WHERE id = ?');
+      del.run(parseInt(req.params.id, 10));
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao excluir cupom." });
     }
   }
 }
@@ -880,6 +1017,7 @@ class CategoryController extends BaseController {
   }
 
   private create(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
     const { name } = req.body;
     if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
     try {
@@ -896,6 +1034,7 @@ class CategoryController extends BaseController {
   }
 
   private delete(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
     try {
       const del = this.db.prepare('DELETE FROM categories WHERE id=?');
       del.run(parseInt(req.params.id, 10));
@@ -927,6 +1066,7 @@ class TagController extends BaseController {
   }
 
   private create(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
     const { name, color, canteen_id } = req.body;
     if (!name || !color || !canteen_id) return res.status(400).json({ error: "Dados incompletos." });
     try {
@@ -939,6 +1079,7 @@ class TagController extends BaseController {
   }
 
   private delete(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
     try {
       const del = this.db.prepare('DELETE FROM tags WHERE id=?');
       del.run(parseInt(req.params.id, 10));
@@ -1013,7 +1154,7 @@ class OrderController extends BaseController {
   }
 
   private create(req: Request, res: Response) {
-    const { user_name, user_id, items, total, canteen_id } = req.body;
+    const { user_name, user_id, items, total, canteen_id, coupon_code } = req.body;
     if (!user_name || !items || !total) return res.status(400).json({ error: "Dados incompletos." });
     
     let code = '';
@@ -1026,10 +1167,39 @@ class OrderController extends BaseController {
       try {
         this.db.exec('BEGIN TRANSACTION');
         
-        const checkStock = this.db.prepare('SELECT stock, name FROM products WHERE id = ?');
-        const checkStockByName = this.db.prepare('SELECT id, stock, name FROM products WHERE name = ?');
+        let calculatedTotal = 0;
+        let neededPoints = 0;
+        let couponDiscountPct = 0;
+        let appliedCoupon: any = null;
+
+        if (coupon_code) {
+           const coupon = this.db.prepare('SELECT * FROM coupons WHERE code = ? AND canteen_id = ? AND active = 1').get(coupon_code, canteen_id || 1) as any;
+           if (!coupon) {
+             this.db.exec('ROLLBACK');
+             return res.status(400).json({ error: "Cupom inválido." });
+           }
+           if (coupon.max_uses !== null && coupon.used_count >= coupon.max_uses) {
+             this.db.exec('ROLLBACK');
+             return res.status(400).json({ error: "Cupom esgotado." });
+           }
+           if (coupon.expires_at && new Date(coupon.expires_at) < new Date()) {
+             this.db.exec('ROLLBACK');
+             return res.status(400).json({ error: "Cupom expirado." });
+           }
+           couponDiscountPct = coupon.discount_pct;
+           appliedCoupon = coupon;
+        }
         
-        // Verificar estoque antes de inserir o pedido
+        const checkStock = this.db.prepare('SELECT stock, name, price, points_price FROM products WHERE id = ?');
+        const checkStockByName = this.db.prepare('SELECT id, stock, name, price, points_price FROM products WHERE name = ?');
+        const userQuery = this.db.prepare('SELECT points FROM users WHERE id = ?');
+        
+        let currentUser = null;
+        if (user_id) {
+           currentUser = userQuery.get(user_id) as any;
+        }
+
+        // Verificar estoque antes de inserir o pedido e recalcular os valores
         for (const item of items) {
           let row;
           if (item.id) {
@@ -1047,14 +1217,39 @@ class OrderController extends BaseController {
             this.db.exec('ROLLBACK');
             return res.status(400).json({ error: `Estoque insuficiente para o produto ${row.name}.` });
           }
+
+          if (item.isReward) {
+             if (!row.points_price) {
+                this.db.exec('ROLLBACK');
+                return res.status(400).json({ error: `Produto ${row.name} não aceita resgate.` });
+             }
+             neededPoints += row.points_price * item.qty;
+          } else {
+             calculatedTotal += row.price * item.qty;
+          }
+        }
+
+        if (neededPoints > 0) {
+            if (!currentUser || currentUser.points < neededPoints) {
+                this.db.exec('ROLLBACK');
+                return res.status(400).json({ error: "Pontos insuficientes para o resgate." });
+            }
+        }
+
+        if (appliedCoupon) {
+          if (appliedCoupon.min_value > 0 && calculatedTotal < appliedCoupon.min_value) {
+            this.db.exec('ROLLBACK');
+            return res.status(400).json({ error: `O valor mínimo para este cupom é R$ ${appliedCoupon.min_value.toFixed(2).replace('.', ',')}.` });
+          }
+          calculatedTotal = calculatedTotal * (1 - (couponDiscountPct / 100));
+          if (calculatedTotal < 0) calculatedTotal = 0;
         }
 
         const insert = this.db.prepare('INSERT INTO orders (code, user_name, user_id, items, total, status, canteen_id) VALUES (?, ?, ?, ?, ?, ?, ?)');
-        const result = insert.run(code, user_name, user_id || null, JSON.stringify(items), total, 'aguardando', canteen_id || 1);
+        const result = insert.run(code, user_name, user_id || null, JSON.stringify(items), calculatedTotal, 'aguardando', canteen_id || 1);
         
         const updateStock = this.db.prepare('UPDATE products SET stock = stock - ? WHERE id = ?');
         const pauseProduct = this.db.prepare('UPDATE products SET active = 0 WHERE id = ?');
-        
         const updateStockByName = this.db.prepare('UPDATE products SET stock = stock - ? WHERE name = ?');
 
         for (const item of items) {
@@ -1071,6 +1266,14 @@ class OrderController extends BaseController {
               pauseProduct.run(row.id);
             }
           }
+        }
+
+        if (neededPoints > 0 && user_id) {
+            this.db.prepare('UPDATE users SET points = points - ? WHERE id = ?').run(neededPoints, user_id);
+        }
+
+        if (appliedCoupon) {
+          this.db.prepare('UPDATE coupons SET used_count = used_count + 1 WHERE id = ?').run(appliedCoupon.id);
         }
         
         this.db.exec('COMMIT');
@@ -1092,8 +1295,22 @@ class OrderController extends BaseController {
   }
 
   private getAll(req: Request, res: Response) {
+    const userIdHeader = req.headers['x-user-id'] as string;
+    if (!userIdHeader) {
+       return res.status(401).json({ error: "Não autorizado." });
+    }
+    const user = this.db.prepare('SELECT role, canteen_id FROM users WHERE id = ?').get(userIdHeader) as any;
+    if (!user || user.role !== 'manager') {
+       return res.status(403).json({ error: "Acesso negado." });
+    }
+
     try {
-      const orders = this.db.prepare("SELECT * FROM orders WHERE status != 'retirado' AND status != 'cancelado' ORDER BY created_at DESC").all();
+      let orders;
+      if (user.canteen_id) {
+         orders = this.db.prepare("SELECT * FROM orders WHERE status != 'retirado' AND status != 'cancelado' AND canteen_id = ? ORDER BY created_at DESC").all(user.canteen_id);
+      } else {
+         orders = this.db.prepare("SELECT * FROM orders WHERE status != 'retirado' AND status != 'cancelado' ORDER BY created_at DESC").all();
+      }
       res.json(orders);
     } catch (error) {
       res.status(500).json({ error: "Erro ao buscar pedidos." });
@@ -1134,23 +1351,31 @@ class OrderController extends BaseController {
   }
 
   private updateStatus(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
     const { status } = req.body;
     if (!status) return res.status(400).json({ error: "Status é obrigatório." });
     try {
       this.db.exec('BEGIN TRANSACTION');
       
       if (status === 'cancelado') {
-        const order = this.db.prepare('SELECT status, items FROM orders WHERE id=?').get(req.params.id) as any;
+        const order = this.db.prepare('SELECT status, items, user_id FROM orders WHERE id=?').get(req.params.id) as any;
         if (order && order.status !== 'cancelado') {
           const itemsArr = JSON.parse(order.items);
           const restoreStock = this.db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?');
           const restoreStockByName = this.db.prepare('UPDATE products SET stock = stock + ? WHERE name = ?');
+          let pointsToRestore = 0;
           for (const item of itemsArr) {
             if (item.id) {
               restoreStock.run(item.qty, item.id);
             } else if (item.name) {
               restoreStockByName.run(item.qty, item.name);
             }
+            if (item.isReward && item.points_price) {
+               pointsToRestore += item.points_price * item.qty;
+            }
+          }
+          if (pointsToRestore > 0 && order.user_id) {
+              this.db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(pointsToRestore, order.user_id);
           }
         }
         this.db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, req.params.id);
@@ -1181,6 +1406,7 @@ class OrderController extends BaseController {
   }
 
   private delete(req: Request, res: Response) {
+    if (!checkGestor(req, res, this.db)) return;
     try {
       const del = this.db.prepare('DELETE FROM orders WHERE id=?');
       del.run(parseInt(req.params.id, 10));
@@ -1211,6 +1437,7 @@ class AppServer {
     const controllers: BaseController[] = [
       new UserController(this.dbManager.db, this.app),
       new ProductController(this.dbManager.db, this.app),
+      new CouponController(this.dbManager.db, this.app),
       new CanteenController(this.dbManager.db, this.app),
       new CategoryController(this.dbManager.db, this.app),
       new RatingController(this.dbManager.db, this.app),
