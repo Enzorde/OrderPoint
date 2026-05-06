@@ -11,11 +11,11 @@ import nodemailer from "nodemailer";
 let transporter: nodemailer.Transporter;
 async function initMailer() {
   if (process.env.SMTP_USER && process.env.SMTP_PASS) {
-    
+    // Configuração real para Outlook / Office 365
     transporter = nodemailer.createTransport({
       host: "smtp.office365.com",
       port: 587,
-      secure: false, 
+      secure: false, // true for 465, false for other ports
       requireTLS: true,
       auth: {
         user: process.env.SMTP_USER,
@@ -24,7 +24,7 @@ async function initMailer() {
     });
     console.log("Real Outlook SMTP initialized.");
   } else {
-
+    // Fallback para Ethereal (Testes)
     const testAccount = await nodemailer.createTestAccount();
     transporter = nodemailer.createTransport({
       host: "smtp.ethereal.email",
@@ -165,6 +165,7 @@ class DatabaseManager {
     `);
     try { this.db.exec("ALTER TABLE users ADD COLUMN points INTEGER DEFAULT 0"); } catch (e) {}
     try { this.db.exec("ALTER TABLE users ADD COLUMN canteen_id INTEGER DEFAULT NULL"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP"); } catch (e) {}
 
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS verification_codes (
@@ -291,9 +292,22 @@ class DatabaseManager {
       insertUser.run('Admin Teste', 'admin@facens.br', 'admin', hashPassword('224641'), 'student', null);
       
       // Seed Gestores
-      insertUser.run('Carlos (Gestor Central)', 'carlos@cantina.br', null, hashPassword('123456'), 'manager', 1);
-      insertUser.run('Mariana (Gestor Bloco B)', 'mariana@cantina.br', null, hashPassword('123456'), 'manager', 2);
-      insertUser.run('João (Gestor Leste)', 'joao@cantina.br', null, hashPassword('123456'), 'manager', 3);
+      insertUser.run('Cantina Central', 'central@facens.br', null, hashPassword('123456'), 'manager', 1);
+      insertUser.run('Cantina Bloco B', 'blocob@facens.br', null, hashPassword('123456'), 'manager', 2);
+      insertUser.run('Cantina Leste', 'leste@facens.br', null, hashPassword('123456'), 'manager', 3);
+      insertUser.run('Super Admin', 'sadmin@facens.br', null, hashPassword('224641'), 'superadmin', null);
+    } else {
+      const sadminCount = this.db.prepare('SELECT COUNT(*) as count FROM users WHERE email = ?').get('sadmin@facens.br') as any;
+      if (sadminCount.count === 0) {
+         const insertUser = this.db.prepare('INSERT INTO users (name, email, matricula, senha, role, canteen_id) VALUES (?, ?, ?, ?, ?, ?)');
+         insertUser.run('Super Admin', 'sadmin@facens.br', null, hashPassword('224641'), 'superadmin', null);
+      }
+      
+      try {
+        this.db.prepare("UPDATE users SET email = 'central@facens.br', name = 'Cantina Central' WHERE email = 'carlos@cantina.br'").run();
+        this.db.prepare("UPDATE users SET email = 'blocob@facens.br', name = 'Cantina Bloco B' WHERE email = 'mariana@cantina.br'").run();
+        this.db.prepare("UPDATE users SET email = 'leste@facens.br', name = 'Cantina Leste' WHERE email = 'joao@cantina.br'").run();
+      } catch (e) {}
     }
 
     // Seed Canteens
@@ -399,6 +413,20 @@ function checkGestor(req: Request, res: Response, db: DatabaseSync): boolean {
   return true;
 }
 
+function checkSuperAdmin(req: Request, res: Response, db: DatabaseSync): boolean {
+  const userIdHeader = req.headers['x-user-id'] as string;
+  if (!userIdHeader) {
+     res.status(401).json({ error: "Não autorizado." });
+     return false;
+  }
+  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(userIdHeader) as any;
+  if (!user || user.role !== 'superadmin') {
+     res.status(403).json({ error: "Acesso negado. Apenas superadmins." });
+     return false;
+  }
+  return true;
+}
+
 class BaseController {
   protected db: DatabaseSync;
   protected app: express.Application;
@@ -422,9 +450,13 @@ class UserController extends BaseController {
     this.app.post("/api/register", this.register.bind(this));
     this.app.post("/usuarios", this.register.bind(this)); // Alias for swagger
     this.app.post("/api/login", this.login.bind(this));
+    this.app.get("/api/users", this.getAll.bind(this));
     this.app.get("/api/users/:id", this.getProfile.bind(this));
     this.app.put("/api/users/:id", this.updateProfile.bind(this));
     this.app.post("/api/users/:id/redeem", this.redeemReward.bind(this));
+    this.app.post("/api/users/manager", this.createManager.bind(this));
+    this.app.put("/api/users/admin/:id", this.updateUser.bind(this));
+    this.app.delete("/api/users/:id", this.deleteUser.bind(this));
     this.app.post("/api/request-code", this.requestCode.bind(this));
     this.app.post("/api/reset-password-request", this.resetPasswordRequest.bind(this));
     this.app.post("/api/reset-password", this.resetPassword.bind(this));
@@ -754,6 +786,72 @@ class UserController extends BaseController {
         res.status(400).json({ error: err.message });
     }
   }
+  private getAll(req: Request, res: Response) {
+    if (!checkSuperAdmin(req, res, this.db)) return;
+    try {
+      const users = this.db.prepare('SELECT id, name, email, matricula, role, canteen_id, points FROM users').all();
+      res.json(users);
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao buscar usuários." });
+    }
+  }
+
+  private createManager(req: Request, res: Response) {
+    if (!checkSuperAdmin(req, res, this.db)) return;
+    const { name, email, senha, canteen_id, role, matricula } = req.body;
+    if (!name || !email || !senha) {
+       return res.status(400).json({ error: "Nome, E-mail e Senha são obrigatórios." });
+    }
+    if (!email.endsWith("@facens.br")) {
+       return res.status(400).json({ error: "O e-mail deve terminar com @facens.br." });
+    }
+    const targetRole = role && ['superadmin', 'manager', 'student'].includes(role) ? role : 'manager';
+    if (targetRole === 'manager' && !canteen_id) {
+       return res.status(400).json({ error: "A cantina é obrigatória para Gestores." });
+    }
+    const hashedSenha = hashPassword(senha);
+    try {
+      const insert = this.db.prepare('INSERT INTO users (name, email, senha, role, canteen_id, matricula) VALUES (?, ?, ?, ?, ?, ?)');
+      const result = insert.run(name, email, hashedSenha, targetRole, targetRole === 'manager' ? canteen_id : null, matricula || null);
+      res.status(201).json({ success: true, userId: result.lastInsertRowid });
+    } catch (error: any) {
+      if (error.message && error.message.includes("UNIQUE constraint failed")) {
+        res.status(400).json({ error: "E-mail já cadastrado." });
+      } else {
+        res.status(500).json({ error: "Erro ao criar conta." });
+      }
+    }
+  }
+
+  private updateUser(req: Request, res: Response) {
+    if (!checkSuperAdmin(req, res, this.db)) return;
+    const { name, email, role, canteen_id, matricula } = req.body;
+    if (!name || !email || !role) {
+       return res.status(400).json({ error: "Nome, E-mail e Função são obrigatórios." });
+    }
+    try {
+      const update = this.db.prepare('UPDATE users SET name=?, email=?, role=?, canteen_id=?, matricula=? WHERE id=?');
+      update.run(name, email, role, role === 'manager' ? canteen_id : null, matricula || null, req.params.id);
+      res.json({ success: true });
+    } catch (error: any) {
+      if (error.message && error.message.includes("UNIQUE constraint failed")) {
+        res.status(400).json({ error: "E-mail já cadastrado noutra conta." });
+      } else {
+        res.status(500).json({ error: "Erro ao atualizar usuário." });
+      }
+    }
+  }
+
+  private deleteUser(req: Request, res: Response) {
+    if (!checkSuperAdmin(req, res, this.db)) return;
+    const { id } = req.params;
+    try {
+      this.db.prepare('DELETE FROM users WHERE id = ?').run(id);
+      res.json({ success: true });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao deletar usuário." });
+    }
+  }
 }
 
 class ProductController extends BaseController {
@@ -851,7 +949,9 @@ class CanteenController extends BaseController {
 
   public registerRoutes() {
     this.app.get("/api/canteens", this.getAll.bind(this));
+    this.app.post("/api/canteens", this.create.bind(this));
     this.app.put("/api/canteens/:id", this.update.bind(this));
+    this.app.delete("/api/canteens/:id", this.delete.bind(this));
     this.app.get("/cantinas", this.getCantinas.bind(this));
   }
 
@@ -881,7 +981,7 @@ class CanteenController extends BaseController {
   }
 
   private update(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
+    if (!checkGestor(req, res, this.db) && !checkSuperAdmin(req, res, this.db)) return;
     const { name, desc, location, emoji, color, open_time, close_time, points_enabled } = req.body;
     try {
       const update = this.db.prepare('UPDATE canteens SET name=?, desc=?, location=?, emoji=?, color=?, open_time=?, close_time=?, points_enabled=? WHERE id=?');
@@ -889,6 +989,30 @@ class CanteenController extends BaseController {
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Erro ao atualizar cantina." });
+    }
+  }
+
+  private create(req: Request, res: Response) {
+    if (!checkSuperAdmin(req, res, this.db)) return;
+    const { name, desc, location, emoji, color, open_time, close_time } = req.body;
+    if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
+    try {
+      const insert = this.db.prepare('INSERT INTO canteens (name, desc, location, emoji, color, open_time, close_time, points_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
+      const result = insert.run(name, desc || '', location || '', emoji || '🍽️', color || '#ffffff', open_time || '08:00', close_time || '18:00', 1);
+      res.status(201).json({ success: true, canteenId: result.lastInsertRowid });
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao criar cantina." });
+    }
+  }
+
+  private delete(req: Request, res: Response) {
+    if (!checkSuperAdmin(req, res, this.db)) return;
+    try {
+      this.db.prepare('DELETE FROM canteens WHERE id=?').run(parseInt(req.params.id, 10));
+      res.json({ success: true });
+    } catch (error) {
+      console.error(error);
+      res.status(500).json({ error: "Erro ao deletar cantina." });
     }
   }
 }
