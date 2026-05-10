@@ -229,6 +229,7 @@ class DatabaseManager {
     }
     try { this.db.exec("ALTER TABLE orders ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
     try { this.db.exec("ALTER TABLE orders ADD COLUMN points_awarded INTEGER DEFAULT 0"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE orders ADD COLUMN cancel_reason TEXT"); } catch (e) {}
 
     // Canteens
     this.db.exec(`
@@ -406,7 +407,7 @@ function checkGestor(req: Request, res: Response, db: DatabaseSync): boolean {
      return false;
   }
   const user = db.prepare('SELECT role FROM users WHERE id = ?').get(userIdHeader) as any;
-  if (!user || user.role !== 'manager') {
+  if (!user || (user.role !== 'manager' && user.role !== 'superadmin')) {
      res.status(403).json({ error: "Acesso negado." });
      return false;
   }
@@ -845,11 +846,17 @@ class UserController extends BaseController {
   private deleteUser(req: Request, res: Response) {
     if (!checkSuperAdmin(req, res, this.db)) return;
     const { id } = req.params;
+    this.db.exec('BEGIN TRANSACTION');
     try {
+      // Cascading deletes for user
+      this.db.prepare('DELETE FROM ratings WHERE order_id IN (SELECT id FROM orders WHERE user_id = ?)').run(id);
+      this.db.prepare('DELETE FROM orders WHERE user_id = ?').run(id);
       this.db.prepare('DELETE FROM users WHERE id = ?').run(id);
+      this.db.exec('COMMIT');
       res.json({ success: true });
     } catch (error) {
-      res.status(500).json({ error: "Erro ao deletar usuário." });
+      this.db.exec('ROLLBACK');
+      res.status(500).json({ error: "Erro ao deletar usuário em cascata." });
     }
   }
 }
@@ -994,11 +1001,11 @@ class CanteenController extends BaseController {
 
   private create(req: Request, res: Response) {
     if (!checkSuperAdmin(req, res, this.db)) return;
-    const { name, desc, location, emoji, color, open_time, close_time } = req.body;
+    const { name, desc, location, emoji, color, open_time, close_time, points_enabled } = req.body;
     if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
     try {
       const insert = this.db.prepare('INSERT INTO canteens (name, desc, location, emoji, color, open_time, close_time, points_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-      const result = insert.run(name, desc || '', location || '', emoji || '🍽️', color || '#ffffff', open_time || '08:00', close_time || '18:00', 1);
+      const result = insert.run(name, desc || '', location || '', emoji || '🍽️', color || '#ffffff', open_time || '08:00', close_time || '18:00', points_enabled !== undefined ? points_enabled : 1);
       res.status(201).json({ success: true, canteenId: result.lastInsertRowid });
     } catch (error) {
       res.status(500).json({ error: "Erro ao criar cantina." });
@@ -1007,12 +1014,23 @@ class CanteenController extends BaseController {
 
   private delete(req: Request, res: Response) {
     if (!checkSuperAdmin(req, res, this.db)) return;
+    this.db.exec('BEGIN TRANSACTION');
     try {
-      this.db.prepare('DELETE FROM canteens WHERE id=?').run(parseInt(req.params.id, 10));
+      const canteenId = parseInt(req.params.id, 10);
+      // Cascading deletes for canteen
+      this.db.prepare('DELETE FROM coupons WHERE canteen_id=?').run(canteenId);
+      this.db.prepare('DELETE FROM tags WHERE canteen_id=?').run(canteenId);
+      this.db.prepare('DELETE FROM ratings WHERE canteen_id=?').run(canteenId);
+      this.db.prepare('DELETE FROM orders WHERE canteen_id=?').run(canteenId);
+      this.db.prepare('DELETE FROM products WHERE canteen_id=?').run(canteenId);
+      this.db.prepare('DELETE FROM users WHERE canteen_id=?').run(canteenId);
+      this.db.prepare('DELETE FROM canteens WHERE id=?').run(canteenId);
+      this.db.exec('COMMIT');
       res.json({ success: true });
     } catch (error) {
+      this.db.exec('ROLLBACK');
       console.error(error);
-      res.status(500).json({ error: "Erro ao deletar cantina." });
+      res.status(500).json({ error: "Erro ao deletar cantina em cascata." });
     }
   }
 }
@@ -1279,7 +1297,7 @@ class OrderController extends BaseController {
 
   private create(req: Request, res: Response) {
     const { user_name, user_id, items, total, canteen_id, coupon_code } = req.body;
-    if (!user_name || !items || !total) return res.status(400).json({ error: "Dados incompletos." });
+    if (!user_name || !items || total === undefined || total === null) return res.status(400).json({ error: "Dados incompletos." });
     
     let code = '';
     let inserted = false;
@@ -1361,6 +1379,10 @@ class OrderController extends BaseController {
         }
 
         if (appliedCoupon) {
+          if (calculatedTotal === 0) {
+            this.db.exec('ROLLBACK');
+            return res.status(400).json({ error: "Cupom não aplicável apenas a itens de resgate." });
+          }
           if (appliedCoupon.min_value > 0 && calculatedTotal < appliedCoupon.min_value) {
             this.db.exec('ROLLBACK');
             return res.status(400).json({ error: `O valor mínimo para este cupom é R$ ${appliedCoupon.min_value.toFixed(2).replace('.', ',')}.` });
@@ -1431,9 +1453,9 @@ class OrderController extends BaseController {
     try {
       let orders;
       if (user.canteen_id) {
-         orders = this.db.prepare("SELECT * FROM orders WHERE status != 'retirado' AND status != 'cancelado' AND canteen_id = ? ORDER BY created_at DESC").all(user.canteen_id);
+         orders = this.db.prepare("SELECT * FROM orders WHERE canteen_id = ? ORDER BY created_at DESC").all(user.canteen_id);
       } else {
-         orders = this.db.prepare("SELECT * FROM orders WHERE status != 'retirado' AND status != 'cancelado' ORDER BY created_at DESC").all();
+         orders = this.db.prepare("SELECT * FROM orders ORDER BY created_at DESC").all();
       }
       res.json(orders);
     } catch (error) {
@@ -1476,7 +1498,7 @@ class OrderController extends BaseController {
 
   private updateStatus(req: Request, res: Response) {
     if (!checkGestor(req, res, this.db)) return;
-    const { status } = req.body;
+    const { status, cancel_reason } = req.body;
     if (!status) return res.status(400).json({ error: "Status é obrigatório." });
     try {
       this.db.exec('BEGIN TRANSACTION');
@@ -1502,7 +1524,7 @@ class OrderController extends BaseController {
               this.db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(pointsToRestore, order.user_id);
           }
         }
-        this.db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, req.params.id);
+        this.db.prepare('UPDATE orders SET status=?, cancel_reason=? WHERE id=?').run(status, cancel_reason || null, req.params.id);
       } else if (status === 'retirado') {
         const order = this.db.prepare('SELECT status, user_id, total, points_awarded, canteen_id FROM orders WHERE id=?').get(req.params.id) as any;
         if (order && order.status !== 'retirado' && !order.points_awarded && order.user_id) {
