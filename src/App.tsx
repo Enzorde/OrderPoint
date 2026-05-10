@@ -2,12 +2,47 @@ import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import EmojiPicker from 'emoji-picker-react';
 
+function LazyMedia({ imageUrl, emoji, alt, className, style, onClick, onMouseEnter, onMouseLeave, title }: { imageUrl?: string, emoji?: string, alt?: string, className?: string, style?: React.CSSProperties, onClick?: () => void, onMouseEnter?: (e: React.MouseEvent) => void, onMouseLeave?: (e: React.MouseEvent) => void, title?: string }) {
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    if (!imageUrl) {
+      const t = setTimeout(() => setLoaded(true), 150);
+      return () => clearTimeout(t);
+    }
+  }, [imageUrl]);
+
+  if (imageUrl) {
+    return (
+      <div className={className} style={{ ...style, position: 'relative', overflow: 'hidden' }} onClick={onClick} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} title={title}>
+        {!loaded && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--bg-secondary)', animation: 'pulse 1.5s infinite' }} />}
+        <img 
+          src={imageUrl} 
+          alt={alt} 
+          loading="lazy"
+          onLoad={() => setLoaded(true)}
+          style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: loaded ? 1 : 0, transition: 'opacity 0.3s' }} 
+        />
+      </div>
+    );
+  }
+
+  return (
+    <div className={className} style={{ ...style, position: 'relative', overflow: 'hidden' }} onClick={onClick} onMouseEnter={onMouseEnter} onMouseLeave={onMouseLeave} title={title}>
+      {!loaded && <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, background: 'var(--bg-secondary)', animation: 'pulse 1.5s infinite' }} />}
+      <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: loaded ? 1 : 0, transition: 'opacity 0.3s', fontSize: 'inherit', position: 'relative', zIndex: 1 }}>
+        {emoji}
+      </div>
+    </div>
+  );
+}
+
 type User = {
   id?: number;
   name: string;
   email?: string;
   matricula?: string;
-  role: 'student' | 'manager';
+  role: 'student' | 'manager' | 'superadmin';
   points?: number;
   canteen_id?: number;
 };
@@ -24,6 +59,8 @@ type Product = {
   points_price?: number;
   canteen_id?: number;
   tags?: string;
+  isReward?: boolean;
+  image_url?: string;
 };
 
 type Tag = {
@@ -68,6 +105,7 @@ type Canteen = {
   avg_rating: number;
   rating_count: number;
   points_enabled?: number;
+  image_url?: string;
 };
 
 type Order = {
@@ -80,6 +118,7 @@ type Order = {
   canteen_id: number;
   rating?: number;
   created_at: string;
+  cancel_reason?: string;
 };
 
 type Category = {
@@ -87,12 +126,13 @@ type Category = {
   name: string;
 };
 
-type Screen = 'login' | 'login-gestor' | 'cadastro' | 'esqueci-senha' | 'cantinas' | 'catalogo' | 'carrinho' | 'confirmacao' | 'status' | 'gestor' | 'meus-pedidos' | 'perfil' | 'pontos';
+type Screen = 'login' | 'login-gestor' | 'cadastro' | 'esqueci-senha' | 'cantinas' | 'catalogo' | 'carrinho' | 'confirmacao' | 'status' | 'gestor' | 'meus-pedidos' | 'perfil' | 'pontos' | 'superadmin';
 
 // --- Padrão de Projeto: STRATEGY (Conforme PDF) ---
 interface GestorCallbacks {
-  updateOrderStatus: (id: number, status: string) => void;
+  updateOrderStatus: (id: number, status: string, cancelReason?: string) => void;
   setDeleteOrderConfirmId: (id: number) => void;
+  promptCancelReason?: (id: number) => void;
 }
 
 interface Padrao_StatusPedido {
@@ -103,14 +143,14 @@ interface Padrao_StatusPedido {
 
 class Status_Aguardando implements Padrao_StatusPedido {
   mostrarTexto() { return '⏳ Aguardando Cantina'; }
-  mostrarCor() { return { background: '#f0f7ff', color: 'var(--primary)' }; }
+  mostrarCor() { return { background: 'var(--primary-soft)', color: 'var(--primary)' }; }
   renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
     return (
       <React.Fragment>
-        <span className="tag" style={{ background: '#f0f7ff', color: 'var(--primary)' }}>Aguardando</span>
+        <span className="tag" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>Aguardando</span>
         <div className="order-actions">
           <button className="btn-orange btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'preparo')}>Aceitar</button>
-          <button className="btn-danger btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'cancelado')}>Recusar</button>
+          <button className="btn-danger btn-sm" onClick={() => callbacks.promptCancelReason ? callbacks.promptCancelReason(orderId) : callbacks.updateOrderStatus(orderId, 'cancelado')}>Recusar</button>
         </div>
       </React.Fragment>
     );
@@ -119,14 +159,14 @@ class Status_Aguardando implements Padrao_StatusPedido {
 
 class Status_Preparo implements Padrao_StatusPedido {
   mostrarTexto() { return '👨‍🍳 Em Preparo'; }
-  mostrarCor() { return { background: '#fff4e6', color: 'var(--orange)' }; }
+  mostrarCor() { return { background: 'var(--orange-soft)', color: 'var(--orange)' }; }
   renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
     return (
       <React.Fragment>
         <span className="tag tag-orange">Em Preparo</span>
         <div className="order-actions">
           <button className="btn-success btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'pronto')}>Pronto!</button>
-          <button className="btn-danger btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'cancelado')}>Cancelar</button>
+          <button className="btn-danger btn-sm" onClick={() => callbacks.promptCancelReason ? callbacks.promptCancelReason(orderId) : callbacks.updateOrderStatus(orderId, 'cancelado')}>Cancelar</button>
         </div>
       </React.Fragment>
     );
@@ -135,7 +175,7 @@ class Status_Preparo implements Padrao_StatusPedido {
 
 class Status_Pronto implements Padrao_StatusPedido {
   mostrarTexto() { return '🔔 Pronto para Retirada'; }
-  mostrarCor() { return { background: '#e6f4ea', color: 'var(--success)' }; }
+  mostrarCor() { return { background: 'var(--success-soft)', color: 'var(--success)' }; }
   renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
     return (
       <React.Fragment>
@@ -150,11 +190,11 @@ class Status_Pronto implements Padrao_StatusPedido {
 
 class Status_Retirado implements Padrao_StatusPedido {
   mostrarTexto() { return '✅ Retirado'; }
-  mostrarCor() { return { background: '#f1f3f4', color: 'var(--muted)' }; }
+  mostrarCor() { return { background: 'var(--card)', color: 'var(--muted)' }; }
   renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
     return (
       <React.Fragment>
-        <span className="tag" style={{ background: '#f3f4f6', color: '#4b5563' }}>Retirado</span>
+        <span className="tag" style={{ background: 'var(--card)', color: 'var(--muted)' }}>Retirado</span>
         <div className="order-actions">
           <button className="btn-danger btn-sm" onClick={() => callbacks.setDeleteOrderConfirmId(orderId)}>Excluir</button>
         </div>
@@ -165,7 +205,7 @@ class Status_Retirado implements Padrao_StatusPedido {
 
 class Status_Cancelado implements Padrao_StatusPedido {
   mostrarTexto() { return '❌ Cancelado'; }
-  mostrarCor() { return { background: '#fce8e6', color: 'var(--danger)' }; }
+  mostrarCor() { return { background: 'var(--danger-soft)', color: 'var(--danger)' }; }
   renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
     return (
       <React.Fragment>
@@ -186,6 +226,16 @@ class Status_Outro implements Padrao_StatusPedido {
     return <React.Fragment></React.Fragment>;
   }
 }
+
+export const formatBrazilTime = (dateString: string) => {
+  const d = dateString.includes('Z') ? new Date(dateString) : new Date(dateString.replace(' ', 'T') + 'Z');
+  return d.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+};
+
+export const formatBrazilDate = (dateString: string) => {
+  const d = dateString.includes('Z') ? new Date(dateString) : new Date(dateString.replace(' ', 'T') + 'Z');
+  return d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
+};
 
 class StatusPedidoContexto {
   private m_Padrao_Status: Padrao_StatusPedido;
@@ -235,8 +285,9 @@ const playNotificationSound = () => {
   }
 };
 
-function ScreenPontos({ goTo, products, canteens, currentUser, setCurrentUser, showToast, addToCart }: { goTo: (s: Screen) => void, products: Product[], canteens: Canteen[], currentUser: User | null, setCurrentUser: (u: User) => void, showToast: (msg: string) => void, addToCart: (p: Product) => void }) {
+function ScreenPontos({ goTo, products, canteens, currentUser, setCurrentUser, showToast, addToCart, cart }: { goTo: (s: Screen) => void, products: Product[], canteens: Canteen[], currentUser: User | null, setCurrentUser: (u: User) => void, showToast: (msg: string) => void, addToCart: (p: Product) => void, cart: CartItem[] }) {
   const points = currentUser?.points || 0;
+  const currentRewardPointsInCart = cart.reduce((sum, item) => sum + (item.isReward && item.points_price ? item.points_price * item.qty : 0), 0);
   const redeemableProducts = products.filter(p => p.points_price && p.points_price > 0 && p.active === 1);
 
   // Group by Canteen
@@ -260,34 +311,15 @@ function ScreenPontos({ goTo, products, canteens, currentUser, setCurrentUser, s
     }
   }, [currentUser?.id, setCurrentUser]);
 
-  const handleRedeem = async (product: Product) => {
+  const handleRedeem = (product: Product) => {
     if (!currentUser?.id) return;
-    if (points < (product.points_price || 0)) {
-      showToast('⚠️ Pontos insuficientes!');
+    if (points - currentRewardPointsInCart < (product.points_price || 0)) {
+      showToast('⚠️ Pontos insuficientes para adicionar mais este item!');
       return;
     }
     
-    try {
-      const res = await fetch(`/api/users/${currentUser.id}/redeem`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'X-User-Id': currentUser.id.toString()
-        },
-        body: JSON.stringify({ productId: product.id })
-      });
-      const data = await res.json();
-      
-      if (res.ok && data.success) {
-        setCurrentUser({ ...currentUser, points: data.newPoints });
-        addToCart({ ...product, price: 0, isReward: true });
-        showToast(`✅ ${product.name} resgatado com sucesso e adicionado ao carrinho!`);
-      } else {
-        showToast(`❌ Erro: ${data.error}`);
-      }
-    } catch (e) {
-      showToast('❌ Erro ao conectar com o servidor.');
-    }
+    addToCart({ ...product, price: 0, isReward: true, points_price: product.points_price });
+    showToast(`✅ ${product.name} adicionado ao carrinho usando pontos!`);
   };
 
   return (
@@ -321,22 +353,24 @@ function ScreenPontos({ goTo, products, canteens, currentUser, setCurrentUser, s
                 </h3>
                 <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 16 }}>
                   {canteenProducts.map(product => {
-                    const isAffordable = points >= (product.points_price || 0);
+                    const isAffordable = (points - currentRewardPointsInCart) >= (product.points_price || 0);
                     return (
                       <div key={product.id} className="product-card" style={{ opacity: product.stock <= 0 ? 0.6 : 1 }}>
-                        <div className="product-emoji" style={{ background: '#f5f5f5' }}>{product.emoji}</div>
+                        <LazyMedia className="product-emoji" emoji={product.emoji} imageUrl={product.image_url} alt={product.name} />
                         <div className="product-info">
-                          <div className="product-title">{product.name}</div>
+                          <div className="product-name">{product.name}</div>
                           <div className="product-desc">{product.desc}</div>
-                          <div className="product-price" style={{ color: 'var(--orange)', marginTop: 8 }}>{product.points_price} pontos</div>
-                          <button 
-                            className={isAffordable ? "btn-outline btn-sm" : "btn-secondary btn-sm"} 
-                            style={{ width: '100%', marginTop: 12 }} 
-                            onClick={() => handleRedeem(product)}
-                            disabled={!isAffordable || product.stock <= 0}
-                          >
-                            {product.stock <= 0 ? 'Esgotado' : isAffordable ? 'Resgatar' : 'Pontos Insuf.'}
-                          </button>
+                          <div className="product-footer" style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 12 }}>
+                            <div className="product-price" style={{ color: 'var(--orange)' }}>{product.points_price} PTS</div>
+                            <button 
+                              className={isAffordable ? "btn-outline btn-sm" : "btn-secondary btn-sm"} 
+                              style={{ width: '100%', opacity: !isAffordable || product.stock <= 0 ? 0.5 : 1 }} 
+                              onClick={() => handleRedeem(product)}
+                              disabled={product.stock <= 0}
+                            >
+                              {product.stock <= 0 ? 'Esgotado' : (isAffordable ? 'Resgatar' : 'Pontos Insuficientes')}
+                            </button>
+                          </div>
                         </div>
                       </div>
                     );
@@ -384,6 +418,10 @@ function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: 
       showToast('Erro: O nome de usuário não pode conter números ou caracteres especiais, apenas letras.');
       return;
     }
+    if (name.trim().split(/\s+/).length < 2) {
+      showToast('Erro: Por favor, informe nome e sobrenome.');
+      return;
+    }
 
     if (isChangingPassword) {
       if (senha !== confirmaSenha) {
@@ -392,6 +430,10 @@ function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: 
       }
       if (senha.length < 6) {
         showToast('Erro: A senha deve ter no mínimo 6 caracteres.');
+        return;
+      }
+      if (getPasswordStrength(senha) < 4) {
+        showToast('Erro: A senha deve conter ao menos uma letra maiúscula, uma minúscula, um número e um caractere especial.');
         return;
       }
     }
@@ -485,7 +527,17 @@ function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: 
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>(() => {
     const saved = localStorage.getItem('currentUser');
-    return saved ? 'cantinas' : 'login';
+    if (saved) {
+      try {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.role === 'superadmin') return 'superadmin';
+        if (parsed && (parsed.role === 'manager' || parsed.role === 'gestor')) return 'gestor';
+        if (parsed) return 'cantinas';
+      } catch (e) {
+        return 'login';
+      }
+    }
+    return 'login';
   });
   const [currentUser, setCurrentUser] = useState<User | null>(() => {
     const saved = localStorage.getItem('currentUser');
@@ -511,6 +563,23 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedCanteen, setSelectedCanteen] = useState<Canteen | null>(null);
+
+  const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
+    const savedTheme = localStorage.getItem('cantinahub_theme');
+    if (savedTheme) {
+      return savedTheme === 'dark';
+    }
+    return window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches;
+  });
+
+  useEffect(() => {
+    if (isDarkMode) {
+      document.documentElement.classList.add('dark');
+    } else {
+      document.documentElement.classList.remove('dark');
+    }
+    localStorage.setItem('cantinahub_theme', isDarkMode ? 'dark' : 'light');
+  }, [isDarkMode]);
 
   const currentUserRef = useRef(currentUser);
   useEffect(() => {
@@ -694,7 +763,11 @@ export default function App() {
       let errorMsg = 'Cupom inválido para as cantinas do carrinho.';
 
       for (const cid of canteenIds) {
-        const applicableItems = cart.filter(item => (item.canteen_id || products.find(p => p.id === item.id)?.canteen_id || 1) === cid);
+        const applicableItems = cart.filter(item => (item.canteen_id || products.find(p => p.id === item.id)?.canteen_id || 1) === cid && !item.isReward);
+        if (applicableItems.length === 0) {
+          errorMsg = 'Nenhum item válido para desconto nesta cantina.';
+          continue;
+        }
         const canteenTotal = applicableItems.reduce((sum, item) => sum + item.price * item.qty, 0);
 
         const res = await fetch('/api/coupons/validate', {
@@ -744,9 +817,12 @@ export default function App() {
     
     try {
       let createdCodes: string[] = [];
+      let totalPointsDeducted = 0;
       for (const [cidStr, items] of Object.entries(ordersByCanteen)) {
         const canteen_id = parseInt(cidStr);
         const total = items.reduce((sum, item) => sum + item.price * item.qty, 0);
+        const applicableTotal = items.filter(i => !i.isReward).reduce((sum, item) => sum + item.price * item.qty, 0);
+        const pointsDeducted = items.reduce((sum, item) => sum + (item.isReward && item.points_price ? item.points_price * item.qty : 0), 0);
 
         const res = await fetch('/api/orders', {
           method: 'POST',
@@ -757,16 +833,21 @@ export default function App() {
             items: items,
             total: total,
             canteen_id: canteen_id,
-            coupon_code: appliedCoupon && appliedCoupon.canteen_id === canteen_id ? appliedCoupon.code : undefined
+            coupon_code: appliedCoupon && appliedCoupon.canteen_id === canteen_id && applicableTotal >= (appliedCoupon.min_value || 0) && applicableTotal > 0 ? appliedCoupon.code : undefined
           })
         });
         
         const data = await res.json();
         if (res.ok && data.success) {
            createdCodes.push(data.code);
+           totalPointsDeducted += pointsDeducted;
         } else {
            throw new Error(data.error || 'Erro ao finalizar pedido.');
         }
+      }
+
+      if (totalPointsDeducted > 0 && currentUser) {
+        setCurrentUser({ ...currentUser, points: Math.max(0, (currentUser.points || 0) - totalPointsDeducted) });
       }
 
       setOrderCode(createdCodes.join(', '));
@@ -820,6 +901,14 @@ export default function App() {
                 </button>
               </>
             )}
+            <button 
+              className="btn-secondary" 
+              style={{ width: 36, height: 36, padding: 0, fontSize: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%' }} 
+              onClick={() => setIsDarkMode(!isDarkMode)}
+              title={isDarkMode ? 'Modo Claro' : 'Modo Escuro'}
+            >
+              {isDarkMode ? '☀️' : '🌙'}
+            </button>
             <button className="btn-secondary" style={{ padding: '8px 14px', fontSize: '13px' }} onClick={logout}>Sair</button>
           </div>
         </nav>
@@ -828,24 +917,25 @@ export default function App() {
       <AnimatePresence mode="wait">
         <motion.div
           key={currentScreen}
-          initial={{ opacity: 0, y: 10 }}
-          animate={{ opacity: 1, y: 0 }}
-          exit={{ opacity: 0, y: -10 }}
-          transition={{ duration: 0.2 }}
+          initial={{ opacity: 0, y: 15, scale: 0.98 }}
+          animate={{ opacity: 1, y: 0, scale: 1 }}
+          exit={{ opacity: 0, y: -15, scale: 0.98 }}
+          transition={{ duration: 0.25, ease: "easeOut" }}
         >
           {currentScreen === 'login' && <ScreenLogin goTo={goTo} setCurrentUser={setCurrentUser} />}
-          {currentScreen === 'login-gestor' && <ScreenLoginGestor goTo={goTo} setCurrentUser={setCurrentUser} />}
+          {currentScreen === 'login-gestor' && <ScreenLoginGestor goTo={goTo} setCurrentUser={setCurrentUser} showToast={showToast} />}
           {currentScreen === 'cadastro' && <ScreenCadastro goTo={goTo} />}
           {currentScreen === 'esqueci-senha' && <ScreenEsqueciSenha goTo={goTo} />}
           {currentScreen === 'cantinas' && <ScreenCantinas goTo={goTo} canteens={canteens} setSelectedCanteen={setSelectedCanteen} />}
-          {currentScreen === 'catalogo' && <ScreenCatalogo goTo={goTo} addToCart={addToCart} products={products} selectedCanteen={selectedCanteen} categories={categories} tags={tags} />}
+          {currentScreen === 'catalogo' && <ScreenCatalogo goTo={goTo} addToCart={addToCart} products={products} selectedCanteen={selectedCanteen} categories={categories} tags={tags} currentUser={currentUser} cart={cart} showToast={showToast} />}
           {currentScreen === 'carrinho' && <ScreenCarrinho goBack={handleGoBackFromCart} cart={cart} changeQty={changeQty} clearCart={clearCart} finalizarPedido={finalizarPedido} couponCodeState={couponCodeState} setCouponCodeState={setCouponCodeState} handleApplyCoupon={handleApplyCoupon} appliedCoupon={appliedCoupon} couponError={couponError} setCouponError={setCouponError} />}
           {currentScreen === 'confirmacao' && <ScreenConfirmacao goTo={goTo} orderCode={orderCode} />}
           {currentScreen === 'status' && <ScreenStatus goTo={goTo} orderCode={orderCode} />}
           {currentScreen === 'meus-pedidos' && <ScreenMeusPedidos goTo={goTo} currentUser={currentUser} setOrderCode={setOrderCode} showToast={showToast} fetchCanteens={fetchCanteens} />}
           {currentScreen === 'gestor' && <ScreenGestor products={products} tags={tags} fetchTags={fetchTags} currentUser={currentUser} fetchProducts={fetchProducts} showToast={showToast} canteens={canteens} fetchCanteens={fetchCanteens} categories={categories} fetchCategories={fetchCategories} />}
+          {currentScreen === 'superadmin' && <ScreenSuperadmin goTo={goTo} currentUser={currentUser} showToast={showToast} fetchCanteens={fetchCanteens} />}
           {currentScreen === 'perfil' && <ScreenPerfil goTo={goTo} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} />}
-          {currentScreen === 'pontos' && <ScreenPontos goTo={goTo} products={products} canteens={canteens} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} addToCart={addToCart} />}
+          {currentScreen === 'pontos' && <ScreenPontos goTo={goTo} products={products} canteens={canteens} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} addToCart={addToCart} cart={cart} />}
         </motion.div>
       </AnimatePresence>
 
@@ -857,7 +947,7 @@ export default function App() {
             exit={{ opacity: 0, y: 20 }}
             style={{
               position: 'fixed', bottom: 24, right: 24,
-              background: '#1a1a1a', color: 'white',
+              background: 'var(--card)', color: 'var(--text)',
               padding: '12px 20px', borderRadius: 12,
               fontWeight: 'bold', fontSize: 14,
               zIndex: 9999
@@ -874,11 +964,23 @@ export default function App() {
 function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setCurrentUser: (u: User) => void }) {
   const [email, setEmail] = useState('');
   const [senha, setSenha] = useState('');
+  const [saveLogin, setSaveLogin] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const doLogin = async () => {
-    if (!email || !senha) {
+  const [savedAccounts, setSavedAccounts] = useState<{email: string, name: string, token: string}[]>(() => {
+    try {
+      const stored = localStorage.getItem('cantinahub_saved_logins_student');
+      return stored ? JSON.parse(stored) : [];
+    } catch (e) {
+      return [];
+    }
+  });
+
+  const doLogin = async (overrideEmail?: string, overridePwd?: string) => {
+    const e = overrideEmail || email;
+    const p = overridePwd || senha;
+    if (!e || !p) {
       setError('Preencha todos os campos.');
       return;
     }
@@ -890,12 +992,22 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, senha })
+        body: JSON.stringify({ email: e, senha: p })
       });
       
       const data = await res.json();
       
       if (res.ok && data.success) {
+        if (saveLogin && !overrideEmail) {
+          const newSaved = [...savedAccounts.filter(a => a.email !== data.user.email), {
+            email: data.user.email,
+            name: data.user.name,
+            token: btoa(p)
+          }];
+          setSavedAccounts(newSaved);
+          localStorage.setItem('cantinahub_saved_logins_student', JSON.stringify(newSaved));
+        }
+
         setCurrentUser({ 
           id: data.user.id,
           name: data.user.name, 
@@ -907,6 +1019,11 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
         goTo('cantinas');
       } else {
         setError(data.error || 'Erro ao fazer login.');
+        if (overrideEmail) {
+           const newSaved = savedAccounts.filter(a => a.email !== overrideEmail);
+           setSavedAccounts(newSaved);
+           localStorage.setItem('cantinahub_saved_logins_student', JSON.stringify(newSaved));
+        }
       }
     } catch (err) {
       setError('Erro de conexão com o servidor.');
@@ -948,84 +1065,788 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
               <span style={{ fontSize: 12, color: 'var(--orange)', cursor: 'pointer' }} onClick={() => goTo('esqueci-senha')}>Esqueci minha senha</span>
             </div>
           </label>
-          <button className="btn-orange btn-full" onClick={doLogin} disabled={loading}>
+          
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', margin: '4px 0 16px 0', fontSize: 14 }}>
+            <input 
+              type="checkbox" 
+              checked={saveLogin} 
+              onChange={e => setSaveLogin(e.target.checked)} 
+              style={{ width: 'auto', margin: 0 }}
+            />
+            Lembrar-me neste computador
+          </label>
+
+          <button className="btn-orange btn-full" onClick={() => doLogin()} disabled={loading}>
             {loading ? 'Entrando...' : 'Entrar'}
           </button>
           <button className="btn-outline btn-full" onClick={() => goTo('login-gestor')}>Entrar como Gestor</button>
         </div>
-        <div className="auth-link">Não tem conta? <span onClick={() => goTo('cadastro')}>Cadastre-se</span></div>
+
+        {savedAccounts.length > 0 && (
+          <div style={{ marginTop: 24, borderTop: '1px solid var(--line)', paddingTop: 20 }}>
+            <p className="auth-subtitle" style={{ marginBottom: 12 }}>Entrar rapidamente:</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+              {savedAccounts.map(acc => (
+                <div 
+                  key={acc.email}
+                  onClick={() => !loading && doLogin(acc.email, atob(acc.token))}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 12, padding: '10px 12px',
+                    border: '1px solid var(--line)', borderRadius: 8, cursor: 'pointer',
+                    transition: 'background 0.2s', opacity: loading ? 0.6 : 1,
+                    background: 'var(--bg-secondary)'
+                  }}
+                  className="saved-account-card"
+                >
+                  <div style={{ fontSize: 20 }}>👤</div>
+                  <div style={{ flex: 1, textAlign: 'left' }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)' }}>{acc.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{acc.email}</div>
+                  </div>
+                  <button 
+                    className="btn-outline btn-sm" 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const newSaved = savedAccounts.filter(a => a.email !== acc.email);
+                      setSavedAccounts(newSaved);
+                      localStorage.setItem('cantinahub_saved_logins_student', JSON.stringify(newSaved));
+                    }}
+                    style={{ padding: '4px 8px', fontSize: 12, borderColor: 'var(--danger)', color: 'var(--danger)' }}
+                  >
+                    Remover
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="auth-link" style={{ marginTop: 20 }}>Não tem conta? <span onClick={() => goTo('cadastro')}>Cadastre-se</span></div>
         {error && <div className="alert alert-error">{error}</div>}
       </div>
     </div>
   );
 }
 
-function ScreenLoginGestor({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setCurrentUser: (u: User) => void }) {
+function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens }: { goTo: (s: Screen) => void, currentUser: User | null, showToast: (msg: string) => void, fetchCanteens: () => void }) {
+  const [activeTab, setActiveTab] = useState<'gerenciar_usuarios' | 'gerenciar_cantinas' | 'criar_cantina' | 'criar_conta' | 'configuracoes'>('gerenciar_usuarios');
+  const [canteens, setCanteens] = useState<Canteen[]>([]);
+  const [users, setUsers] = useState<User[]>([]);
+  const [loading, setLoading] = useState(true);
+  
+  const [newManagerName, setNewManagerName] = useState('');
+  const [newManagerEmail, setNewManagerEmail] = useState('');
+  const [newManagerSenha, setNewManagerSenha] = useState('');
+  const [newManagerCanteen, setNewManagerCanteen] = useState<number | ''>('');
+  const [newManagerRole, setNewManagerRole] = useState<'manager' | 'superadmin' | 'student'>('manager');
+  const [newManagerMatricula, setNewManagerMatricula] = useState('');
+
+  const [editingUser, setEditingUser] = useState<number | null>(null);
+  const [editUserForm, setEditUserForm] = useState<Partial<User>>({});
+
+  const [userSearch, setUserSearch] = useState('');
+  const [userRoleFilter, setUserRoleFilter] = useState('todos');
+
+  const [newCanteenName, setNewCanteenName] = useState('');
+  const [newCanteenLocation, setNewCanteenLocation] = useState('');
+  const [newCanteenEmoji, setNewCanteenEmoji] = useState('🍽️');
+  const [newCanteenDesc, setNewCanteenDesc] = useState('');
+  const [newCanteenColor, setNewCanteenColor] = useState('#ffffff');
+  const [newCanteenOpenTime, setNewCanteenOpenTime] = useState('08:00');
+  const [newCanteenCloseTime, setNewCanteenCloseTime] = useState('18:00');
+  const [newCanteenPointsEnabled, setNewCanteenPointsEnabled] = useState(true);
+
+  const [editingCanteen, setEditingCanteen] = useState<number | null>(null);
+  const [editCanteenForm, setEditCanteenForm] = useState<Partial<Canteen>>({});
+
+  const [deletingUser, setDeletingUser] = useState<number | null>(null);
+  const [deletingCanteen, setDeletingCanteen] = useState<number | null>(null);
+
+  const fetchData = async () => {
+    setLoading(true);
+    try {
+      const [canteensRes, usersRes] = await Promise.all([
+        fetch('/api/canteens', { headers: { 'X-User-Id': currentUser?.id?.toString() || '' }}),
+        fetch('/api/users', { headers: { 'X-User-Id': currentUser?.id?.toString() || '' }})
+      ]);
+      if (canteensRes.ok) setCanteens(await canteensRes.json());
+      if (usersRes.ok) setUsers(await usersRes.json());
+    } catch (e) {
+      console.error(e);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    if (currentUser?.role === 'superadmin') {
+      fetchData();
+    }
+  }, [currentUser]);
+
+  const handleCreateManager = async () => {
+    if (!newManagerName || !newManagerEmail || !newManagerSenha) return showToast('Preencha os campos obrigatórios (Nome, E-mail, Senha)');
+    if (getPasswordStrength(newManagerSenha) < 4) {
+      return showToast('A senha deve conter ao menos uma letra maiúscula, uma minúscula, um número e um caractere especial.');
+    }
+    const res = await fetch('/api/users/manager', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
+      body: JSON.stringify({ 
+        name: newManagerName, 
+        email: newManagerEmail, 
+        senha: newManagerSenha, 
+        canteen_id: newManagerCanteen,
+        role: newManagerRole,
+        matricula: newManagerMatricula
+      })
+    });
+    if (res.ok) {
+      setNewManagerName('');
+      setNewManagerEmail('');
+      setNewManagerSenha('');
+      setNewManagerCanteen('');
+      setNewManagerMatricula('');
+      setNewManagerRole('manager');
+      fetchData();
+      showToast('Conta criada com sucesso!');
+    } else {
+      const data = await res.json();
+      showToast(data.error || 'Erro ao criar conta');
+    }
+  };
+
+  const handleUpdateUser = async (id: number) => {
+    if (!editUserForm.name || !editUserForm.email) return showToast('Nome e e-mail são obrigatórios!');
+    const res = await fetch(`/api/users/admin/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
+      body: JSON.stringify(editUserForm)
+    });
+    if (res.ok) {
+      setEditingUser(null);
+      fetchData();
+      showToast('Usuário atualizado com sucesso!');
+    } else {
+      const data = await res.json();
+      showToast(data.error || 'Erro ao atualizar usuário');
+    }
+  };
+
+  const handleDeleteUser = async (id: number) => {
+    const res = await fetch(`/api/users/${id}`, {
+      method: 'DELETE',
+      headers: { 'X-User-Id': currentUser?.id?.toString() || '' }
+    });
+    setDeletingUser(null);
+    if (res.ok) {
+      showToast('Usuário apagado com sucesso!');
+      fetchData();
+    } else {
+      showToast('Erro ao apagar usuário.');
+    }
+  };
+
+  const handleCreateCanteen = async () => {
+    if (!newCanteenName) return showToast('Nome da cantina é obrigatório');
+    if (newCanteenOpenTime >= newCanteenCloseTime) {
+      return showToast('O horário de fechamento deve ser posterior ao horário de abertura.');
+    }
+    const res = await fetch('/api/canteens', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
+      body: JSON.stringify({ 
+        name: newCanteenName, 
+        location: newCanteenLocation, 
+        emoji: newCanteenEmoji,
+        desc: newCanteenDesc,
+        color: newCanteenColor,
+        open_time: newCanteenOpenTime,
+        close_time: newCanteenCloseTime,
+        points_enabled: newCanteenPointsEnabled ? 1 : 0
+      })
+    });
+    if (res.ok) {
+      setNewCanteenName('');
+      setNewCanteenLocation('');
+      setNewCanteenEmoji('🍽️');
+      setNewCanteenDesc('');
+      setNewCanteenColor('#ffffff');
+      setNewCanteenOpenTime('08:00');
+      setNewCanteenCloseTime('18:00');
+      setNewCanteenPointsEnabled(true);
+      fetchData();
+      fetchCanteens(); // update app menus
+      showToast('Cantina criada com sucesso!');
+    } else {
+      showToast('Erro ao criar cantina');
+    }
+  };
+
+  const openEditCanteen = (c: Canteen) => {
+    setEditingCanteen(c.id);
+    setEditCanteenForm(c);
+  };
+
+  const handleUpdateCanteen = async (id: number) => {
+    if (!editCanteenForm.name) return showToast('Nome da cantina é obrigatório');
+    if (editCanteenForm.open_time && editCanteenForm.close_time && editCanteenForm.open_time === editCanteenForm.close_time) {
+      return showToast('O horário de fechamento não pode ser igual ao de abertura.');
+    }
+    const res = await fetch(`/api/canteens/${id}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
+      body: JSON.stringify({ ...editCanteenForm })
+    });
+    if (res.ok) {
+      setEditingCanteen(null);
+      fetchData();
+      fetchCanteens(); // update app menus
+      showToast('Cantina atualizada com sucesso!');
+    } else {
+      showToast('Erro ao atualizar cantina');
+    }
+  };
+
+  const handleDeleteCanteen = async (id: number) => {
+    const res = await fetch(`/api/canteens/${id}`, {
+      method: 'DELETE',
+      headers: { 'X-User-Id': currentUser?.id?.toString() || '' }
+    });
+    setDeletingCanteen(null);
+    if (res.ok) {
+      showToast('Cantina apagada com sucesso!');
+      fetchData();
+      fetchCanteens();
+    } else {
+      const data = await res.json().catch(() => ({error: 'Erro desconhecido'}));
+      showToast(data.error || 'Erro ao apagar cantina.');
+    }
+  };
+
+  if (currentUser?.role !== 'superadmin') {
+    return (
+      <div style={{ padding: 40, textAlign: 'center' }}>
+        Acesso negado. Apenas superadmins podem ver esta página.
+        <br/><button className="btn-outline" style={{ marginTop: 20 }} onClick={() => goTo('login')}>Voltar</button>
+      </div>
+    );
+  }
+  
+  return (
+    <div style={{ padding: 20, maxWidth: 1200, margin: '0 auto' }}>
+      <div style={{ marginBottom: 24 }}>
+        <div className="tag tag-orange">Acesso Restrito</div>
+        <h2 style={{ fontSize: 28, fontWeight: 'bold', marginTop: 8 }}>👑 Painel Superadmin</h2>
+        <p style={{ color: 'var(--muted)', marginTop: 4 }}>Gerencie cantinas e contas de acesso ao sistema.</p>
+      </div>
+
+      <div className="superadmin-layout">
+        <div className="superadmin-sidebar">
+          <button className={`gestor-tab ${activeTab === 'gerenciar_usuarios' ? 'active' : ''}`} onClick={() => setActiveTab('gerenciar_usuarios')} style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 8, width: '100%', border: 'none', background: activeTab === 'gerenciar_usuarios' ? 'var(--orange)' : 'transparent', color: activeTab === 'gerenciar_usuarios' ? '#fff' : 'var(--text)', fontWeight: activeTab === 'gerenciar_usuarios' ? 'bold' : 'normal', cursor: 'pointer' }}>👥 Gerenciar Usuários</button>
+          <button className={`gestor-tab ${activeTab === 'gerenciar_cantinas' ? 'active' : ''}`} onClick={() => setActiveTab('gerenciar_cantinas')} style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 8, width: '100%', border: 'none', background: activeTab === 'gerenciar_cantinas' ? 'var(--orange)' : 'transparent', color: activeTab === 'gerenciar_cantinas' ? '#fff' : 'var(--text)', fontWeight: activeTab === 'gerenciar_cantinas' ? 'bold' : 'normal', cursor: 'pointer' }}>🏪 Gerenciar Cantinas</button>
+          <button className={`gestor-tab ${activeTab === 'criar_cantina' ? 'active' : ''}`} onClick={() => setActiveTab('criar_cantina')} style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 8, width: '100%', border: 'none', background: activeTab === 'criar_cantina' ? 'var(--orange)' : 'transparent', color: activeTab === 'criar_cantina' ? '#fff' : 'var(--text)', fontWeight: activeTab === 'criar_cantina' ? 'bold' : 'normal', cursor: 'pointer' }}>➕ Criar Cantina</button>
+          <button className={`gestor-tab ${activeTab === 'criar_conta' ? 'active' : ''}`} onClick={() => setActiveTab('criar_conta')} style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 8, width: '100%', border: 'none', background: activeTab === 'criar_conta' ? 'var(--orange)' : 'transparent', color: activeTab === 'criar_conta' ? '#fff' : 'var(--text)', fontWeight: activeTab === 'criar_conta' ? 'bold' : 'normal', cursor: 'pointer' }}>➕ Criar Gestor</button>
+          <button className={`gestor-tab ${activeTab === 'configuracoes' ? 'active' : ''}`} onClick={() => setActiveTab('configuracoes')} style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 8, width: '100%', border: 'none', background: activeTab === 'configuracoes' ? 'var(--orange)' : 'transparent', color: activeTab === 'configuracoes' ? '#fff' : 'var(--text)', fontWeight: activeTab === 'configuracoes' ? 'bold' : 'normal', cursor: 'pointer' }}>⚙️ Configurações</button>
+        </div>
+
+        <div style={{ flex: 1, minWidth: 0 }}>
+      {loading ? (
+        <div style={{ textAlign: 'center', padding: 40, color: 'var(--muted)' }}>Carregando dados...</div>
+      ) : (
+        <>
+          {activeTab === 'gerenciar_usuarios' && (
+            <div>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: 16, flexWrap: 'wrap', gap: 12 }}>
+                <h3 style={{ fontSize: 18, fontWeight: 'bold' }}>Lista de Usuários ({users.length})</h3>
+                <div style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+                  <input 
+                    type="text" 
+                    placeholder="Buscar por nome ou e-mail..." 
+                    value={userSearch} 
+                    onChange={e => setUserSearch(e.target.value)}
+                    style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid var(--line)', fontSize: 14, minWidth: 200, flex: 1 }}
+                  />
+                  <select 
+                    value={userRoleFilter} 
+                    onChange={e => setUserRoleFilter(e.target.value)}
+                    style={{ padding: '8px 12px', borderRadius: 6, border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', fontSize: 14 }}
+                  >
+                    <option value="todos">Todos</option>
+                    <option value="student">Estudantes</option>
+                    <option value="manager">Gestores</option>
+                    <option value="superadmin">Superadmins</option>
+                  </select>
+                </div>
+              </div>
+                <div style={{ overflowX: 'auto', background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--line)' }}>
+                  <table style={{ width: '100%', borderCollapse: 'collapse', textAlign: 'left', minWidth: 800 }}>
+                    <thead>
+                      <tr style={{ background: 'var(--bg)', borderBottom: '1px solid var(--line)' }}>
+                        <th style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>ID</th>
+                        <th style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>NOME</th>
+                        <th style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>E-MAIL</th>
+                        <th style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>TIPO</th>
+                        <th style={{ padding: '12px 16px', fontSize: 13, color: 'var(--muted)' }}>AÇÕES</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {users
+                        .filter(u => userRoleFilter === 'todos' || u.role === userRoleFilter)
+                        .filter(u => userSearch === '' || u.name.toLowerCase().includes(userSearch.toLowerCase()) || u.email.toLowerCase().includes(userSearch.toLowerCase()))
+                        .sort((a,b) => b.id - a.id)
+                        .map(user => (
+                        <tr key={user.id} style={{ borderBottom: '1px solid var(--line)', background: editingUser === user.id ? 'var(--bg)' : 'transparent' }}>
+                          <td style={{ padding: '12px 16px', fontSize: 14 }}>{user.id}</td>
+                          {editingUser === user.id ? (
+                            <td colSpan={4} style={{ padding: '12px 16px' }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+                                <label className="form-label">Nome<input type="text" className="form-input" value={editUserForm.name || ''} onChange={e => setEditUserForm({...editUserForm, name: e.target.value})} /></label>
+                                <label className="form-label">E-mail<input type="email" className="form-input" value={editUserForm.email || ''} onChange={e => setEditUserForm({...editUserForm, email: e.target.value})} /></label>
+                                <label className="form-label">Tipo
+                                  <select className="form-input" value={editUserForm.role || 'student'} onChange={e => setEditUserForm({...editUserForm, role: e.target.value as any})} >
+                                    <option value="student">Estudante</option>
+                                    <option value="manager">Gestor</option>
+                                    <option value="superadmin">Superadmin</option>
+                                  </select>
+                                </label>
+                                {editUserForm.role === 'manager' && (
+                                  <label className="form-label">Cantina
+                                    <select className="form-input" value={editUserForm.canteen_id || ''} onChange={e => setEditUserForm({...editUserForm, canteen_id: Number(e.target.value)})} >
+                                      <option value="">Selecione...</option>
+                                      {canteens.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                                    </select>
+                                  </label>
+                                )}
+                                {editUserForm.role === 'student' && (
+                                  <label className="form-label">Matrícula
+                                    <input type="text" className="form-input" value={editUserForm.matricula || ''} onChange={e => setEditUserForm({...editUserForm, matricula: e.target.value})} />
+                                  </label>
+                                )}
+                              </div>
+                              <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                                <button className="btn-success btn-sm" onClick={() => handleUpdateUser(user.id)}>Salvar</button>
+                                <button className="btn-secondary btn-sm" onClick={() => setEditingUser(null)}>Cancelar</button>
+                                <div style={{ flex: 1 }}></div>
+                                {user.id !== currentUser?.id && deletingUser !== user.id && (
+                                  <button className="btn-sm" style={{ background: 'transparent', color: 'var(--danger)', textDecoration: 'underline', border: 'none' }} onClick={() => setDeletingUser(user.id)}>Excluir Definitivamente</button>
+                                )}
+                                {deletingUser === user.id && (
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                    <span style={{ fontSize: 13, color: 'var(--danger)' }}>Tem certeza?</span>
+                                    <button className="btn-danger btn-sm" onClick={() => user.id && handleDeleteUser(user.id)}>Sim, excluir</button>
+                                    <button className="btn-secondary btn-sm" onClick={() => setDeletingUser(null)}>Não</button>
+                                  </div>
+                                )}
+                              </div>
+                            </td>
+                          ) : (
+                            <>
+                              <td style={{ padding: '12px 16px', fontSize: 14, fontWeight: 500 }}>{user.name}</td>
+                              <td style={{ padding: '12px 16px', fontSize: 14 }}>{user.email}</td>
+                              <td style={{ padding: '12px 16px', fontSize: 14 }}>
+                                {user.role === 'superadmin' ? <span className="tag" style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}>👑 Superadmin</span> : 
+                                 user.role === 'manager' ? <span className="tag tag-orange">Gestor {user.canteen_id ? `(C${user.canteen_id})` : ''}</span> : 
+                                 <span className="tag" style={{ background: 'var(--card)', color: 'var(--text)' }}>Estudante</span>}
+                              </td>
+                              <td style={{ padding: '12px 16px', fontSize: 14 }}>
+                                <button className="btn-outline btn-sm" onClick={() => {
+                                  setEditingUser(user.id);
+                                  setEditUserForm(user);
+                                }}>✏️ Editar</button>
+                              </td>
+                            </>
+                          )}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+          )}
+
+          {activeTab === 'gerenciar_cantinas' && (
+            <div>
+              <h3 style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 16 }}>Lista de Cantinas ({canteens.length})</h3>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                  {canteens.map(c => (
+                    <div key={c.id} style={{ padding: 16, background: 'var(--surface)', borderRadius: 12, border: '1px solid var(--line)' }}>
+                      {editingCanteen === c.id ? (
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+                          <h4 style={{ fontWeight: 'bold' }}>Editar Parâmetros da Cantina</h4>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                            <label className="form-label">Nome<input type="text" className="form-input" value={editCanteenForm.name || ''} onChange={e => setEditCanteenForm({...editCanteenForm, name: e.target.value})} /></label>
+                            <label className="form-label">Emoji<input type="text" className="form-input" value={editCanteenForm.emoji || ''} onChange={e => setEditCanteenForm({...editCanteenForm, emoji: e.target.value})} /></label>
+                            <label className="form-label">Localização<input type="text" className="form-input" value={editCanteenForm.location || ''} onChange={e => setEditCanteenForm({...editCanteenForm, location: e.target.value})} /></label>
+                            <label className="form-label">Cor<input type="color" className="form-input" value={editCanteenForm.color || '#ffffff'} onChange={e => setEditCanteenForm({...editCanteenForm, color: e.target.value})} style={{ padding: 2, height: 44 }} /></label>
+                            <label className="form-label">Abertura<input type="time" className="form-input" value={editCanteenForm.open_time || ''} onChange={e => setEditCanteenForm({...editCanteenForm, open_time: e.target.value})} /></label>
+                            <label className="form-label">Fechamento<input type="time" className="form-input" value={editCanteenForm.close_time || ''} onChange={e => setEditCanteenForm({...editCanteenForm, close_time: e.target.value})} /></label>
+                          </div>
+                          <div style={{ padding: 12, border: '1px solid var(--line)', borderRadius: 8, marginTop: 12 }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', margin: 0 }}>
+                              <input type="checkbox" checked={editCanteenForm.points_enabled === 1} onChange={e => setEditCanteenForm({...editCanteenForm, points_enabled: e.target.checked ? 1 : 0})} style={{ width: 18, height: 18 }} />
+                              <span style={{ fontWeight: 500 }}>Programa de Pontos Ativo</span>
+                            </label>
+                            <p style={{ margin: '4px 0 0 30px', fontSize: 13, color: 'var(--muted)' }}>Alunos poderão acumular e resgatar pontos nesta cantina.</p>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
+                            <button className="btn-success btn-sm" onClick={() => handleUpdateCanteen(c.id)}>Salvar Alterações</button>
+                            <button className="btn-secondary btn-sm" onClick={() => setEditingCanteen(null)}>Cancelar</button>
+                            <div style={{ flex: 1 }}></div>
+                            {deletingCanteen !== c.id && (
+                              <button className="btn-sm" style={{ background: 'transparent', color: 'var(--danger)', textDecoration: 'underline', border: 'none' }} onClick={() => setDeletingCanteen(Number(c.id))}>Excluir Cantina</button>
+                            )}
+                            {deletingCanteen === c.id && (
+                              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                                <span style={{ fontSize: 13, color: 'var(--danger)' }}>Órfãos podem ser criados. Excluir?</span>
+                                <button className="btn-danger btn-sm" onClick={() => c.id && handleDeleteCanteen(Number(c.id))}>Sim, excluir</button>
+                                <button className="btn-secondary btn-sm" onClick={() => setDeletingCanteen(null)}>Não</button>
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      ) : (
+                        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
+                            <div className="canteen-icon-bg" style={{ fontSize: 32, width: 48, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', background: c.color || '#eee', borderRadius: '50%', position: 'relative', overflow: 'hidden' }}>
+                              <span style={{ position: 'relative', zIndex: 1 }}>{c.emoji}</span>
+                            </div>
+                            <div>
+                              <div style={{ fontWeight: 'bold', fontSize: 16 }}>{c.name} (ID: {c.id})</div>
+                              <div style={{ color: 'var(--muted)', fontSize: 14 }}>{c.location || 'Sem localização descrita'} • {c.open_time} - {c.close_time}</div>
+                            </div>
+                          </div>
+                          <div style={{ display: 'flex', gap: 8 }}>
+                            <button className="btn-outline btn-sm" onClick={() => openEditCanteen(c)}>Editar Parâmetros</button>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+          )}
+
+          {activeTab === 'criar_cantina' && (
+            <div style={{ padding: 24, background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--line)' }}>
+              <h3 style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 16 }}>Nova Cantina</h3>
+              <div style={{ maxWidth: 600 }}>
+                <label className="form-label">Nome
+                  <input type="text" className="form-input" value={newCanteenName} onChange={e => setNewCanteenName(e.target.value)} />
+                </label>
+                <label className="form-label">Localização
+                  <input type="text" className="form-input" value={newCanteenLocation} onChange={e => setNewCanteenLocation(e.target.value)} />
+                </label>
+                <label className="form-label">Emoji Representativo
+                  <input type="text" className="form-input" value={newCanteenEmoji} onChange={e => setNewCanteenEmoji(e.target.value)} />
+                </label>
+                <label className="form-label">Cor (Hexadecimal)
+                  <input type="color" className="form-input" value={newCanteenColor} onChange={e => setNewCanteenColor(e.target.value)} style={{ padding: 4, height: 44 }} />
+                </label>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 12 }}>
+                  <label className="form-label">Abertura
+                    <input type="time" className="form-input" value={newCanteenOpenTime} onChange={e => setNewCanteenOpenTime(e.target.value)} />
+                  </label>
+                  <label className="form-label">Fechamento
+                    <input type="time" className="form-input" value={newCanteenCloseTime} onChange={e => setNewCanteenCloseTime(e.target.value)} />
+                  </label>
+                </div>
+                <div style={{ padding: 12, border: '1px solid var(--line)', borderRadius: 8, marginBottom: 16 }}>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', margin: 0 }}>
+                    <input type="checkbox" checked={newCanteenPointsEnabled} onChange={e => setNewCanteenPointsEnabled(e.target.checked)} style={{ width: 18, height: 18 }} />
+                    <span style={{ fontWeight: 500 }}>Programa de Pontos Ativo</span>
+                  </label>
+                  <p style={{ margin: '4px 0 0 30px', fontSize: 13, color: 'var(--muted)' }}>Alunos poderão acumular pontos nesta cantina e trocar por recompensas.</p>
+                </div>
+                <button className="btn-orange btn-full" onClick={handleCreateCanteen}>Criar Cantina</button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'criar_conta' && (
+            <div style={{ padding: 24, background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--line)' }}>
+              <h3 style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 16 }}>Criar Nova Conta / Gestor</h3>
+              <div style={{ maxWidth: 600 }}>
+                <label className="form-label">Nome
+                  <input type="text" className="form-input" value={newManagerName} onChange={e => setNewManagerName(e.target.value)} />
+                </label>
+                <label className="form-label">E-mail
+                  <input type="email" className="form-input" value={newManagerEmail} onChange={e => setNewManagerEmail(e.target.value)} />
+                </label>
+                <label className="form-label" style={{ marginBottom: 4 }}>Senha
+                  <input type="text" className="form-input" value={newManagerSenha} onChange={e => setNewManagerSenha(e.target.value)} />
+                </label>
+                <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
+                  {[1, 2, 3, 4].map(idx => (
+                    <div key={idx} style={{ flex: 1, height: 4, borderRadius: 2, background: newManagerSenha.length > 0 && idx <= getPasswordStrength(newManagerSenha) ? ['#e5e7eb', '#ef4444', '#f59e0b', '#3b82f6', '#10b981'][getPasswordStrength(newManagerSenha)] : '#e5e7eb', transition: 'background 0.3s' }}></div>
+                  ))}
+                </div>
+                <p style={{ margin: '0 0 12px 0', fontSize: 12, color: newManagerSenha.length > 0 ? ['#e5e7eb', '#ef4444', '#f59e0b', '#3b82f6', '#10b981'][getPasswordStrength(newManagerSenha)] : 'var(--muted)' }}>
+                  {newManagerSenha.length > 0 ? ['Muito Fraca', 'Fraca', 'Razoável', 'Forte', 'Muito Forte'][getPasswordStrength(newManagerSenha)] : 'Use maiúsculas, minúsculas, números e símbolos'}
+                </p>
+                <label className="form-label">Tipo de Conta
+                  <select className="form-input" value={newManagerRole} onChange={e => setNewManagerRole(e.target.value as any)}>
+                    <option value="student">Estudante</option>
+                    <option value="manager">Gestor</option>
+                    <option value="superadmin">Superadmin</option>
+                  </select>
+                </label>
+                {newManagerRole === 'manager' && (
+                  <label className="form-label">Cantina Vinculada
+                    <select className="form-input" value={newManagerCanteen} onChange={e => setNewManagerCanteen(Number(e.target.value))}>
+                      <option value="">Selecione...</option>
+                      {canteens.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                    </select>
+                  </label>
+                )}
+                {newManagerRole === 'student' && (
+                  <label className="form-label">Matrícula (opcional)
+                    <input type="text" className="form-input" value={newManagerMatricula} onChange={e => setNewManagerMatricula(e.target.value)} />
+                  </label>
+                )}
+                <button className="btn-orange btn-full" onClick={handleCreateManager}>Criar Conta</button>
+              </div>
+            </div>
+          )}
+
+          {activeTab === 'configuracoes' && (
+            <div style={{ padding: 24, background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--line)' }}>
+              <h3 style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 16 }}>Configurações Gerais</h3>
+              <p style={{ color: 'var(--muted)', marginBottom: 24 }}>Nesta seção, poderemos implementar diversas funcionalidades futuras para o controle global do CantinaHUB:</p>
+              
+              <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
+                <div className="card" style={{ padding: 16 }}>
+                  <h4>🚧 Modo de Manutenção</h4>
+                  <p style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8 }}>Desative temporariamente o acesso aos alunos para realizar atualizações de sistema. Gerentes e Superadmins continuariam com acesso normal.</p>
+                </div>
+                
+                <div className="card" style={{ padding: 16 }}>
+                  <h4>📢 Avisos Globais</h4>
+                  <p style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8 }}>Escreva banners ou mensagens de aviso que aparecerão no topo da tela para todos os usuários logados (ex: Comunicados de feriados).</p>
+                </div>
+                
+                <div className="card" style={{ padding: 16 }}>
+                  <h4>🪙 Multiplicador de Pontos</h4>
+                  <p style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8 }}>Configure o valor global de conversão de pontos, por exemplo: Quantos pontos um aluno recebe a cada R$ 1,00 gasto.</p>
+                </div>
+                
+                <div className="card" style={{ padding: 16 }}>
+                  <h4>💾 Backup de Dados</h4>
+                  <p style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8 }}>Adicione botões para exportar todo o histórico de vendas, produtos e usuários, ou até para forçar o backup do banco de dados completo.</p>
+                </div>
+              </div>
+            </div>
+          )}
+        </>
+      )}
+      </div>
+      </div>
+    </div>
+  );
+}
+
+function ScreenLoginGestor({ goTo, setCurrentUser, showToast }: { goTo: (s: Screen) => void, setCurrentUser: (u: User) => void, showToast: (msg: string) => void }) {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
+  const [customEmail, setCustomEmail] = useState('');
+  const [customSenha, setCustomSenha] = useState('');
+  const [saveLogin, setSaveLogin] = useState(false);
 
-  const savedAccounts = [
-    { email: 'carlos@cantina.br', name: 'Carlos (Gestor Central)', emoji: '🍕' },
-    { email: 'mariana@cantina.br', name: 'Mariana (Gestor Bloco B)', emoji: '🥗' },
-    { email: 'joao@cantina.br', name: 'João (Gestor Leste)', emoji: '☕' }
-  ];
+  const [savedAccounts, setSavedAccounts] = useState<{email: string, name: string, emoji: string, token: string}[]>(() => {
+    try {
+      const stored = localStorage.getItem('cantinahub_saved_logins_gestor');
+      if (stored) return JSON.parse(stored);
+      return [
+        { email: 'central@facens.br', name: 'Cantina Central', emoji: '🍕', token: btoa('123456') },
+        { email: 'blocob@facens.br', name: 'Cantina Bloco B', emoji: '🥗', token: btoa('123456') },
+        { email: 'leste@facens.br', name: 'Cantina Leste', emoji: '☕', token: btoa('123456') },
+        { email: 'sadmin@facens.br', name: 'Super Admin', emoji: '👑', token: btoa('224641') }
+      ];
+    } catch (e) {
+      return [];
+    }
+  });
 
-  const doLoginGestor = async (email: string) => {
+  const handleLoginResponse = (data: any, passwordUsed?: string) => {
+      if (passwordUsed && saveLogin && !savedAccounts.some(a => a.email === data.user.email)) {
+        const newSaved = [...savedAccounts, {
+          email: data.user.email,
+          name: data.user.name,
+          emoji: data.user.role === 'superadmin' ? '👑' : '👨‍💼',
+          token: btoa(passwordUsed)
+        }];
+        setSavedAccounts(newSaved);
+        localStorage.setItem('cantinahub_saved_logins_gestor', JSON.stringify(newSaved));
+      }
+
+      if (data.user.role === 'superadmin') {
+        setCurrentUser(data.user);
+        goTo('superadmin');
+      } else {
+        setCurrentUser(data.user);
+        goTo('gestor');
+      }
+  };
+
+  const doAutoLogin = async (acc: typeof savedAccounts[0]) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const decodedPassword = atob(acc.token);
+      const res = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: acc.email, senha: decodedPassword })
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        handleLoginResponse(data, decodedPassword);
+      } else {
+        const errorMsg = data.error || 'Erro ao fazer login. Senha pode ter sido alterada.';
+        setError(errorMsg);
+        showToast(errorMsg);
+        const newSaved = savedAccounts.filter(a => a.email !== acc.email);
+        setSavedAccounts(newSaved);
+        localStorage.setItem('cantinahub_saved_logins_gestor', JSON.stringify(newSaved));
+      }
+    } catch (e) {
+      setError('Erro de conexão.');
+      showToast('Erro de conexão.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const doManualLogin = async () => {
+    if (!customEmail || !customSenha) {
+      const msg = 'Preencha e-mail e senha.';
+      setError(msg);
+      showToast(msg);
+      return;
+    }
     setLoading(true);
     setError(null);
     try {
       const res = await fetch('/api/login', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email, senha: '123456' })
+        body: JSON.stringify({ email: customEmail, senha: customSenha })
       });
       const data = await res.json();
       if (res.ok && data.success) {
-        setCurrentUser(data.user);
-        goTo('gestor');
+        handleLoginResponse(data, customSenha);
       } else {
-        setError(data.error || 'Erro ao fazer login.');
+        const errorMsg = data.error || 'Erro ao fazer login.';
+        setError(errorMsg);
+        showToast(errorMsg);
       }
     } catch (e) {
       setError('Erro de conexão.');
+      showToast('Erro de conexão.');
     } finally {
       setLoading(false);
     }
+  };
+
+  const handleKeyDown = (e: React.KeyboardEvent) => {
+    if (e.key === 'Enter') doManualLogin();
   };
 
   return (
     <div className="auth-wrapper">
       <div className="auth-card">
         <div className="auth-logo">🍽️ OrderPoint</div>
-        <div className="tag tag-orange">Gestor da Cantina</div>
-        <p className="auth-subtitle" style={{ marginTop: 8 }}>Selecione sua conta salva</p>
+        <div className="tag tag-orange">Acesso Restrito</div>
         
-        <div style={{ marginTop: 24, display: 'flex', flexDirection: 'column', gap: 12 }}>
-          {savedAccounts.map(acc => (
-            <div 
-              key={acc.email}
-              onClick={() => !loading && doLoginGestor(acc.email)}
-              style={{
-                display: 'flex', alignItems: 'center', gap: 16, padding: '16px',
-                border: '1px solid var(--line)', borderRadius: 12, cursor: 'pointer',
-                transition: 'background 0.2s', opacity: loading ? 0.6 : 1
-              }}
-              className="saved-account-card"
-            >
-              <div style={{ fontSize: 32 }}>{acc.emoji}</div>
-              <div style={{ flex: 1, textAlign: 'left' }}>
-                <div style={{ fontWeight: 600, fontSize: 16, color: 'var(--text)' }}>{acc.name}</div>
-                <div style={{ fontSize: 14, color: 'var(--muted)' }}>{acc.email}</div>
-              </div>
-            </div>
-          ))}
+        <div style={{ marginTop: 24, textAlign: 'left' }}>
+          {error && <div className="auth-error">{error}</div>}
+          <label style={{ display: 'block', marginBottom: 12 }}>E-mail
+            <input 
+              type="email" 
+              placeholder="central@facens.br" 
+              value={customEmail} 
+              onChange={e => setCustomEmail(e.target.value)} 
+              onKeyDown={handleKeyDown}
+              style={{ width: '100%' }}
+            />
+          </label>
+          <label style={{ display: 'block', marginBottom: 16 }}>Senha
+            <input 
+              type="password" 
+              placeholder="••••••" 
+              value={customSenha} 
+              onChange={e => setCustomSenha(e.target.value)} 
+              onKeyDown={handleKeyDown}
+              style={{ width: '100%' }}
+            />
+          </label>
+          <label style={{ display: 'flex', alignItems: 'center', gap: 8, cursor: 'pointer', margin: '4px 0 16px 0', fontSize: 14 }}>
+            <input 
+              type="checkbox" 
+              checked={saveLogin} 
+              onChange={e => setSaveLogin(e.target.checked)} 
+              style={{ width: 'auto', margin: 0 }}
+            />
+            Lembrar-me neste computador
+          </label>
+          <button className="btn-orange btn-full" onClick={doManualLogin} disabled={loading}>
+            {loading ? 'Entrando...' : 'Entrar'}
+          </button>
         </div>
 
-        {error && <div className="alert alert-error" style={{ marginTop: 16 }}>{error}</div>}
-        <div className="auth-link" style={{ marginTop: 24 }}><span onClick={() => goTo('login')}>← Voltar para login de aluno</span></div>
+        {savedAccounts.length > 0 && (
+          <div style={{ marginTop: 24, borderTop: '1px solid var(--line)', paddingTop: 20 }}>
+            <p className="auth-subtitle" style={{ marginBottom: 12 }}>Entrar rapidamente:</p>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+              {savedAccounts.map(acc => (
+                <div 
+                  key={acc.email}
+                  onClick={() => !loading && doAutoLogin(acc)}
+                  style={{
+                    display: 'flex', alignItems: 'center', gap: 16, padding: '12px 16px',
+                    border: '1px solid var(--line)', borderRadius: 12, cursor: 'pointer',
+                    transition: 'background 0.2s', opacity: loading ? 0.6 : 1
+                  }}
+                  className="saved-account-card"
+                >
+                  <div style={{ fontSize: 24 }}>{acc.emoji}</div>
+                  <div style={{ flex: 1, textAlign: 'left' }}>
+                    <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)' }}>{acc.name}</div>
+                    <div style={{ fontSize: 12, color: 'var(--muted)' }}>{acc.email}</div>
+                  </div>
+                  <button 
+                    className="btn-outline btn-sm" 
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      const newSaved = savedAccounts.filter(a => a.email !== acc.email);
+                      setSavedAccounts(newSaved);
+                      localStorage.setItem('cantinahub_saved_logins_gestor', JSON.stringify(newSaved));
+                    }}
+                    style={{ padding: '4px 8px', fontSize: 12, borderColor: 'var(--danger)', color: 'var(--danger)' }}
+                  >
+                    Remover
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+        <div className="auth-link" style={{ marginTop: 24 }}>
+          <span onClick={() => goTo('login')}>← Voltar para login de aluno</span>
+        </div>
       </div>
     </div>
   );
+}
+
+function getPasswordStrength(pass: string) {
+  let score = 0;
+  if (/[A-Z]/.test(pass)) score++;
+  if (/[a-z]/.test(pass)) score++;
+  if (/[0-9]/.test(pass)) score++;
+  if (/[^A-Za-z0-9]/.test(pass)) score++;
+  return score;
 }
 
 function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
@@ -1039,6 +1860,10 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
 
+  const pwdScore = getPasswordStrength(senha);
+  const strengthColors = ['#e5e7eb', '#ef4444', '#f59e0b', '#3b82f6', '#10b981'];
+  const strengthLabels = ['Muito Fraca', 'Fraca', 'Razoável', 'Forte', 'Muito Forte'];
+
   const doRequestCode = async () => {
     if (!nome || !email || !senha || !confirmaSenha) {
       setError('Preencha todos os campos obrigatórios.');
@@ -1049,12 +1874,20 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
       setError('O nome de usuário não pode conter números ou caracteres especiais, apenas letras.');
       return;
     }
+    if (nome.trim().split(/\s+/).length < 2) {
+      setError('Por favor, insira nome e sobrenome.');
+      return;
+    }
     if (senha !== confirmaSenha) {
       setError('As senhas não coincidem.');
       return;
     }
     if (senha.length < 6) {
       setError('A senha deve ter no mínimo 6 caracteres.');
+      return;
+    }
+    if (pwdScore < 4) {
+      setError('A senha deve conter ao menos uma letra maiúscula, uma minúscula, um número e um caractere especial.');
       return;
     }
     const emailRegex = /^\d{6}@facens\.br$/;
@@ -1143,9 +1976,17 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
               <label>E-mail institucional
                 <input type="email" placeholder="123456@facens.br" value={email} onChange={e => setEmail(e.target.value)} onKeyDown={handleKeyDownForm} />
               </label>
-              <label>Senha
+              <label style={{ marginBottom: 4 }}>Senha
                 <input type="password" placeholder="Mínimo 6 caracteres" value={senha} onChange={e => setSenha(e.target.value)} onKeyDown={handleKeyDownForm} />
               </label>
+              <div style={{ display: 'flex', gap: 4, marginBottom: 4 }}>
+                {[1, 2, 3, 4].map(idx => (
+                  <div key={idx} style={{ flex: 1, height: 4, borderRadius: 2, background: senha.length > 0 && idx <= pwdScore ? strengthColors[pwdScore] : '#e5e7eb', transition: 'background 0.3s' }}></div>
+                ))}
+              </div>
+              <p style={{ margin: '0 0 12px 0', fontSize: 12, color: senha.length > 0 ? strengthColors[pwdScore] : 'var(--muted)' }}>
+                {senha.length > 0 ? strengthLabels[pwdScore] : 'Use maiúsculas, minúsculas, números e símbolos'}
+              </p>
               <label>Confirmar senha
                 <input type="password" placeholder="Repita a senha" value={confirmaSenha} onChange={e => setConfirmaSenha(e.target.value)} onKeyDown={handleKeyDownForm} />
               </label>
@@ -1383,7 +2224,7 @@ function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Scre
                 }
               }}
             >
-              <div className="cantina-img" style={{ background: canteen.color }}>{canteen.emoji}</div>
+              <LazyMedia className="cantina-img" style={{ background: canteen.color }} emoji={canteen.emoji} imageUrl={canteen.image_url} alt={canteen.name} />
               <div className="cantina-info">
                 <h3>{canteen.name}</h3>
                 {canteen.location && (
@@ -1413,7 +2254,7 @@ function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Scre
   );
 }
 
-function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories, tags }: { goTo: (s: Screen) => void, addToCart: (p: Product) => void, products: Product[], selectedCanteen: Canteen | null, categories: Category[], tags: Tag[] }) {
+function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories, tags, currentUser, cart, showToast }: { goTo: (s: Screen) => void, addToCart: (p: Product) => void, products: Product[], selectedCanteen: Canteen | null, categories: Category[], tags: Tag[], currentUser: User | null, cart: CartItem[], showToast: (msg: string) => void }) {
   const [activeCat, setActiveCat] = useState('todos');
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [addedProductId, setAddedProductId] = useState<number | null>(null);
@@ -1421,10 +2262,26 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
   const activeProducts = products.filter(p => p.active === 1 && (!selectedCanteen || (p.canteen_id || 1) === selectedCanteen.id));
   const filteredProducts = activeCat === 'todos' ? activeProducts : activeProducts.filter(p => p.cat === activeCat);
 
+  const points = currentUser?.points || 0;
+  const currentRewardPointsInCart = cart ? cart.reduce((sum, item) => sum + (item.isReward && item.points_price ? item.points_price * item.qty : 0), 0) : 0;
+
   const handleAddToCart = (p: Product) => {
     addToCart(p);
     setAddedProductId(p.id);
     setTimeout(() => setAddedProductId(null), 500);
+  };
+
+  const handleAddToCartWithPoints = (p: Product) => {
+    if (!currentUser?.id) return;
+    if (points - currentRewardPointsInCart < (p.points_price || 0)) {
+      showToast('⚠️ Pontos insuficientes para adicionar mais este item!');
+      return;
+    }
+    
+    addToCart({ ...p, price: 0, isReward: true, points_price: p.points_price });
+    setAddedProductId(p.id);
+    setTimeout(() => setAddedProductId(null), 500);
+    showToast(`✅ ${p.name} adicionado ao carrinho usando pontos!`);
   };
 
   return (
@@ -1445,28 +2302,32 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
         ))}
       </div>
       <div className="products-grid">
-        {filteredProducts.map(p => (
-          <motion.div 
-            className="product-card" 
-            key={p.name}
-            animate={addedProductId === p.id ? { scale: [1, 1.05, 1], borderColor: ['#e5e7eb', '#f97316', '#e5e7eb'] } : {}}
-            transition={{ duration: 0.3 }}
-          >
-            <div 
+        <AnimatePresence>
+          {filteredProducts.map(p => (
+            <motion.div 
+              className="product-card" 
+              key={p.id}
+              initial={{ opacity: 0, scale: 0.9 }}
+              animate={{ opacity: 1, scale: 1, ...(addedProductId === p.id ? { scale: [1, 1.05, 1], borderColor: ['var(--line)', '#f97316', 'var(--line)'] } : {}) }}
+              exit={{ opacity: 0, scale: 0.9 }}
+              transition={{ duration: 0.25 }}
+            >
+            <LazyMedia 
               className="product-emoji" 
               onClick={() => setSelectedProduct(p)}
               style={{ cursor: 'pointer', transition: 'transform 0.2s' }}
               onMouseEnter={(e) => e.currentTarget.style.transform = 'scale(1.1)'}
               onMouseLeave={(e) => e.currentTarget.style.transform = 'scale(1)'}
               title="Ver detalhes"
-            >
-              {p.emoji}
-            </div>
+              emoji={p.emoji}
+              imageUrl={p.image_url}
+              alt={p.name}
+            />
             <div className="product-info">
               <div className="product-name">{p.name}</div>
               <div className="product-desc">{p.desc}</div>
               {p.tags && p.tags !== '[]' && (
-                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8 }}>
+                <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap', marginTop: 8, marginBottom: 12 }}>
                   {(() => {
                     try {
                       const tagIds = JSON.parse(p.tags) as number[];
@@ -1492,20 +2353,52 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
                   })()}
                 </div>
               )}
-              <div className="product-footer" style={{ marginTop: 12 }}>
-                <span className="product-price">R$ {p.price.toFixed(2).replace('.', ',')}</span>
-                <button 
-                  className="btn-orange btn-sm" 
-                  onClick={() => handleAddToCart(p)}
-                  disabled={p.stock <= 0}
-                  style={{ opacity: p.stock <= 0 ? 0.5 : 1, transition: 'all 0.2s', transform: addedProductId === p.id ? 'scale(1.1)' : 'scale(1)' }}
-                >
-                  {addedProductId === p.id ? '✓ Adicionado' : (p.stock <= 0 ? 'Esgotado' : '+ Adicionar')}
-                </button>
+              <div className="product-footer" style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 12 }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                  <span className="product-price">R$ {p.price.toFixed(2).replace('.', ',')}</span>
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <button 
+                    className="btn-orange btn-sm" 
+                    onClick={() => handleAddToCart(p)}
+                    disabled={p.stock <= 0}
+                    style={{ 
+                      opacity: p.stock <= 0 ? 0.5 : 1, 
+                      transition: 'all 0.3s cubic-bezier(0.4, 0, 0.2, 1)', 
+                      transform: addedProductId === p.id ? 'scale(1.02)' : 'scale(1)',
+                      boxShadow: addedProductId === p.id ? '0 0 20px rgba(249, 115, 22, 0.6), 0 0 10px rgba(249, 115, 22, 0.4)' : 'none',
+                      backgroundColor: addedProductId === p.id ? '#ea580c' : 'var(--orange)',
+                      width: '100%',
+                      padding: '10px'
+                    }}
+                  >
+                    {addedProductId === p.id ? '✓ Adicionado' : (p.stock <= 0 ? 'Esgotado' : '+ Adicionar')}
+                  </button>
+                  {p.points_price && p.points_price > 0 ? (
+                    <button 
+                      className="btn-outline btn-sm" 
+                      onClick={() => handleAddToCartWithPoints(p)}
+                      disabled={p.stock <= 0}
+                      style={{ 
+                        opacity: p.stock <= 0 || points - currentRewardPointsInCart < p.points_price ? 0.5 : 1,
+                        borderColor: 'var(--success)',
+                        color: 'var(--success)',
+                        width: '100%',
+                        padding: '10px'
+                      }}
+                      title={`Resgatar usando ${p.points_price} pontos`}
+                    >
+                      🎟️ {p.points_price} PTS
+                    </button>
+                  ) : (
+                    <div style={{ height: '38px' }}></div>
+                  )}
+                </div>
               </div>
             </div>
           </motion.div>
         ))}
+        </AnimatePresence>
       </div>
 
       <AnimatePresence>
@@ -1608,7 +2501,7 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
                 </div>
               )}
               
-              <div style={{ display: 'flex', gap: 12, justifyContent: 'center' }}>
+              <div style={{ display: 'flex', gap: 12, justifyContent: 'center', flexDirection: 'column' }}>
                 <button 
                   className="btn-orange" 
                   style={{ flex: 1, padding: '12px 24px', fontSize: 16, transition: 'all 0.2s', transform: addedProductId === selectedProduct.id ? 'scale(1.05)' : 'scale(1)' }}
@@ -1620,6 +2513,26 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
                 >
                   {addedProductId === selectedProduct.id ? '✓ Adicionado' : (selectedProduct.stock <= 0 ? 'Esgotado' : 'Adicionar ao Carrinho')}
                 </button>
+                {selectedProduct.points_price && selectedProduct.points_price > 0 && (
+                  <button 
+                    className="btn-outline" 
+                    style={{ 
+                      flex: 1, 
+                      padding: '12px 24px', 
+                      fontSize: 16, 
+                      borderColor: 'var(--success)', 
+                      color: 'var(--success)',
+                      opacity: selectedProduct.stock <= 0 || points - currentRewardPointsInCart < selectedProduct.points_price ? 0.5 : 1
+                    }}
+                    onClick={() => {
+                      handleAddToCartWithPoints(selectedProduct);
+                      setTimeout(() => setSelectedProduct(null), 500);
+                    }}
+                    disabled={selectedProduct.stock <= 0}
+                  >
+                    🎟️ Usar {selectedProduct.points_price} Pontos
+                  </button>
+                )}
               </div>
             </motion.div>
           </motion.div>
@@ -1631,11 +2544,13 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
 
 function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, couponCodeState, setCouponCodeState, handleApplyCoupon, appliedCoupon, couponError, setCouponError }: { goBack: () => void, cart: CartItem[], changeQty: (i: number, d: number) => void, clearCart: () => void, finalizarPedido: () => void, couponCodeState: string, setCouponCodeState: (s: string) => void, handleApplyCoupon: (c: string) => void, appliedCoupon: any, couponError: string, setCouponError: (e: string) => void }) {
   const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+  const totalPoints = cart.reduce((sum, item) => sum + (item.isReward && item.points_price ? item.points_price * item.qty : 0), 0);
   
   let discountAmount = 0;
-  if (appliedCoupon) {
-    const applicableItems = cart.filter(item => item.canteen_id === appliedCoupon.canteen_id || (!item.canteen_id && appliedCoupon.canteen_id === 1));
-    const applicableTotal = applicableItems.reduce((sum, i) => sum + i.price * i.qty, 0);
+  const applicableTotal = appliedCoupon ? cart.filter(item => (item.canteen_id === appliedCoupon.canteen_id || (!item.canteen_id && appliedCoupon.canteen_id === 1)) && !item.isReward).reduce((sum, i) => sum + i.price * i.qty, 0) : 0;
+  const isCouponValid = appliedCoupon && applicableTotal >= (appliedCoupon.min_value || 0) && applicableTotal > 0;
+  
+  if (isCouponValid) {
     discountAmount = applicableTotal * (appliedCoupon.discount_pct / 100);
   }
   const finalTotal = Math.max(0, total - discountAmount);
@@ -1658,16 +2573,20 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, c
                   <div className="cart-item-info">
                     <div className="cart-item-name">{item.name}</div>
                     <div className="cart-item-price">
-                      {item.price === 0 ? <span style={{ color: 'var(--success)', fontWeight: 'bold' }}>RESGATE</span> : `R$ ${item.price.toFixed(2).replace('.', ',')}`}
+                      {item.price === 0 ? <span style={{ color: 'var(--success)', fontWeight: 'bold' }}>{item.points_price} PTS</span> : `R$ ${item.price.toFixed(2).replace('.', ',')}`}
                     </div>
                   </div>
                   <div className="qty-ctrl">
-                    <button className="qty-btn" style={{ background: '#e2e8f0', color: '#1e293b' }} onClick={() => changeQty(idx, -1)}>−</button>
+                    <button className="qty-btn" onClick={() => changeQty(idx, -1)}>−</button>
                     <strong>{item.qty}</strong>
-                    <button className="qty-btn" style={{ background: '#e2e8f0', color: '#1e293b' }} onClick={() => changeQty(idx, 1)}>+</button>
+                    {!item.isReward ? (
+                      <button className="qty-btn" onClick={() => changeQty(idx, 1)}>+</button>
+                    ) : (
+                      <div style={{ width: 28 }}></div>
+                    )}
                   </div>
                   <strong style={{ minWidth: 64, textAlign: 'right', color: 'var(--success)' }}>
-                    {item.price === 0 ? 'Grátis' : `R$ ${(item.price * item.qty).toFixed(2).replace('.', ',')}`}
+                    {item.price === 0 ? (item.points_price ? `${item.points_price * item.qty} PTS` : 'Grátis') : `R$ ${(item.price * item.qty).toFixed(2).replace('.', ',')}`}
                   </strong>
                 </div>
               ))
@@ -1685,7 +2604,7 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, c
               {cart.map(item => (
                 <div className="summary-line" key={item.name}>
                   <span>{item.name} × {item.qty}</span>
-                  <span>{item.price === 0 ? 'Grátis' : `R$ ${(item.price * item.qty).toFixed(2).replace('.', ',')}`}</span>
+                  <span>{item.price === 0 ? (item.points_price ? `${item.points_price * item.qty} PTS` : 'Grátis') : `R$ ${(item.price * item.qty).toFixed(2).replace('.', ',')}`}</span>
                 </div>
               ))}
             </div>
@@ -1715,12 +2634,18 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, c
                   )}
                 </>
               ) : (
-                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', background: '#ecfdf5', borderRadius: '8px', border: '1px solid #a7f3d0' }}>
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '12px', background: isCouponValid ? '#ecfdf5' : '#fee2e2', borderRadius: '8px', border: `1px solid ${isCouponValid ? '#a7f3d0' : '#fca5a5'}` }}>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                     <span style={{ fontSize: 18 }}>🎟️</span>
                     <div>
-                      <p style={{ fontSize: 14, fontWeight: 600, color: '#065f46', margin: 0 }}>{appliedCoupon.code}</p>
-                      <p style={{ fontSize: 13, color: '#059669', margin: 0 }}>{appliedCoupon.discount_pct}% OFF aplicado!</p>
+                      <p style={{ fontSize: 14, fontWeight: 600, color: isCouponValid ? '#065f46' : '#991b1b', margin: 0 }}>{appliedCoupon.code}</p>
+                      {isCouponValid ? (
+                        <p style={{ fontSize: 13, color: '#059669', margin: 0 }}>{appliedCoupon.discount_pct}% OFF aplicado!</p>
+                      ) : (
+                        <p style={{ fontSize: 13, color: '#b91c1c', margin: 0 }}>
+                           Valor mínimo: R$ {(appliedCoupon.min_value || 0).toFixed(2).replace('.', ',')}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <button className="btn-outline btn-sm" style={{ borderColor: 'transparent', color: '#ef4444', padding: '4px 8px' }} onClick={() => handleApplyCoupon('')}>Remover</button>
@@ -1733,7 +2658,7 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, c
                 <span>Subtotal</span>
                 <span>R$ {total.toFixed(2).replace('.', ',')}</span>
               </div>
-              {appliedCoupon && (
+              {isCouponValid && (
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', color: 'var(--success)', fontWeight: 500 }}>
                   <span>Desconto</span>
                   <span>- R$ {discountAmount.toFixed(2).replace('.', ',')}</span>
@@ -1744,6 +2669,20 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, c
                 <span style={{ color: 'var(--success)' }}>R$ {finalTotal.toFixed(2).replace('.', ',')}</span>
               </div>
             </div>
+            
+            {totalPoints > 0 && (
+              <div style={{ marginTop: '16px', borderTop: '2px dashed #e2e8f0', paddingTop: '16px' }}>
+                <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '8px', color: 'var(--muted)' }}>
+                  <span>Subtotal em Pontos</span>
+                  <span><span style={{ color: 'var(--orange)', fontWeight: 600 }}>{totalPoints}</span> pts</span>
+                </div>
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '16px', fontWeight: 'bold', color: 'var(--orange)' }}>
+                  <span>Total de Pontos a deduzir</span>
+                  <span>- {totalPoints} pts</span>
+                </div>
+              </div>
+            )}
+            
             <button className="btn-orange btn-full" style={{ marginTop: 20 }} onClick={finalizarPedido}>
               ✅ Finalizar Pedido
             </button>
@@ -1780,6 +2719,7 @@ function ScreenConfirmacao({ goTo, orderCode }: { goTo: (s: Screen) => void, ord
 
 function ScreenStatus({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCode: string }) {
   const [status, setStatus] = useState<'aguardando' | 'preparo' | 'pronto' | 'retirado' | 'cancelado'>('aguardando');
+  const [orderInfo, setOrderInfo] = useState<Order | null>(null);
 
   useEffect(() => {
     if (!orderCode) return;
@@ -1790,6 +2730,7 @@ function ScreenStatus({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCod
         if (res.ok) {
           const data = await res.json();
           setStatus(data.status);
+          setOrderInfo(data);
         }
       } catch (err) {
         console.error('Erro ao buscar status', err);
@@ -1813,6 +2754,11 @@ function ScreenStatus({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCod
             <div style={{ fontSize: 40, marginBottom: 10 }}>❌</div>
             <h3 style={{ color: 'var(--danger)' }}>Pedido Cancelado</h3>
             <p style={{ color: 'var(--muted)', marginTop: 8 }}>Seu pedido foi cancelado pela cantina.</p>
+            {orderInfo?.cancel_reason && (
+              <div style={{ marginTop: 16, padding: 12, background: 'var(--danger-soft)', color: 'var(--danger)', borderRadius: 8, textAlign: 'left' }}>
+                <strong>Motivo:</strong> {orderInfo.cancel_reason}
+              </div>
+            )}
           </div>
         ) : (
           <div className="status-steps">
@@ -1946,64 +2892,73 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
           myOrders.map(order => {
             const items: CartItem[] = JSON.parse(order.items);
             const itemsText = items.map(i => `${i.qty}x ${i.name}`).join(', ');
+            const orderTime = formatBrazilTime(order.created_at);
+            const orderDateFormatted = formatBrazilDate(order.created_at);
             
             return (
               <div className="order-card" key={order.id}>
-                <div>
-                  <div className="order-id">Pedido {order.code}</div>
-                  <div className="order-meta" style={{ marginBottom: 8 }}>{itemsText}</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+                  <div className="order-id">
+                    Pedido {order.code} <span style={{ color: 'var(--muted)', fontSize: 12, fontWeight: 'normal', marginLeft: 8 }}>📅 {orderDateFormatted} às {orderTime}</span>
+                  </div>
+                  <div className="order-meta" style={{ marginBottom: 4 }}>{itemsText}</div>
                   <div style={{ fontWeight: 600 }}>Total: R$ {order.total.toFixed(2).replace('.', ',')}</div>
                 </div>
-                <div className="order-actions-user">
+                <div className="order-actions-user" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
                   <span className="tag" style={getStatusColor(order.status)}>{getStatusText(order.status)}</span>
-                  {order.status !== 'retirado' && order.status !== 'cancelado' && (
-                    <button 
-                      className="btn-secondary btn-sm" 
-                      onClick={() => {
-                        setOrderCode(order.code);
-                        goTo('status');
-                      }}
-                    >
-                      Ver Detalhes
-                    </button>
-                  )}
-                  {order.status === 'retirado' && !order.rating && (
-                    <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
-                      {[1, 2, 3, 4, 5].map(star => (
-                        <span 
-                          key={star} 
-                          style={{ cursor: 'pointer', fontSize: 20, color: '#d1d5db' }}
-                          onClick={() => handleRate(order.id, order.canteen_id, star)}
-                          onMouseEnter={(e) => {
-                            const siblings = e.currentTarget.parentElement?.children;
-                            if (siblings) {
-                              for (let i = 0; i < siblings.length; i++) {
-                                (siblings[i] as HTMLElement).style.color = i < star ? '#f59e0b' : '#d1d5db';
+                    {order.status !== 'retirado' && order.status !== 'cancelado' && (
+                      <button 
+                        className="btn-secondary btn-sm" 
+                        onClick={() => {
+                          setOrderCode(order.code);
+                          goTo('status');
+                        }}
+                      >
+                        Ver Detalhes
+                      </button>
+                    )}
+                    {order.status === 'retirado' && !order.rating && (
+                      <div style={{ display: 'flex', gap: 4, marginTop: 4 }}>
+                        {[1, 2, 3, 4, 5].map(star => (
+                          <span 
+                            key={star} 
+                            style={{ cursor: 'pointer', fontSize: 20, color: '#d1d5db' }}
+                            onClick={() => handleRate(order.id, order.canteen_id, star)}
+                            onMouseEnter={(e) => {
+                              const siblings = e.currentTarget.parentElement?.children;
+                              if (siblings) {
+                                for (let i = 0; i < siblings.length; i++) {
+                                  (siblings[i] as HTMLElement).style.color = i < star ? '#f59e0b' : '#d1d5db';
+                                }
                               }
-                            }
-                          }}
-                          onMouseLeave={(e) => {
-                            const siblings = e.currentTarget.parentElement?.children;
-                            if (siblings) {
-                              for (let i = 0; i < siblings.length; i++) {
-                                (siblings[i] as HTMLElement).style.color = '#d1d5db';
+                            }}
+                            onMouseLeave={(e) => {
+                              const siblings = e.currentTarget.parentElement?.children;
+                              if (siblings) {
+                                for (let i = 0; i < siblings.length; i++) {
+                                  (siblings[i] as HTMLElement).style.color = '#d1d5db';
+                                }
                               }
-                            }
-                          }}
-                        >
-                          ★
-                        </span>
-                      ))}
-                    </div>
-                  )}
-                  {order.status === 'retirado' && order.rating && (
-                    <div style={{ display: 'flex', gap: 2, marginTop: 4 }}>
-                      {[1, 2, 3, 4, 5].map(star => (
-                        <span key={star} style={{ fontSize: 16, color: star <= order.rating! ? '#f59e0b' : '#d1d5db' }}>★</span>
-                      ))}
-                    </div>
-                  )}
-                </div>
+                            }}
+                          >
+                            ★
+                          </span>
+                        ))}
+                      </div>
+                    )}
+                    {order.status === 'retirado' && order.rating && (
+                      <div style={{ display: 'flex', gap: 2, marginTop: 4 }}>
+                        {[1, 2, 3, 4, 5].map(star => (
+                          <span key={star} style={{ fontSize: 16, color: star <= order.rating! ? '#f59e0b' : '#d1d5db' }}>★</span>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                {order.status === 'cancelado' && order.cancel_reason && (
+                  <div style={{ padding: 12, background: 'var(--danger-soft)', color: 'var(--danger)', borderRadius: 8, fontSize: 14 }}>
+                    <strong>Motivo do cancelamento:</strong> {order.cancel_reason}
+                  </div>
+                )}
               </div>
             );
           })
@@ -2014,12 +2969,16 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
 }
 
 function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, canteens, fetchCanteens, categories, fetchCategories, fetchTags }: { products: Product[], tags: Tag[], currentUser: User | null, fetchProducts: () => void, showToast: (msg: string) => void, canteens: Canteen[], fetchCanteens: () => void, categories: Category[], fetchCategories: () => void, fetchTags: () => void }) {
-  const [activeTab, setActiveTab] = useState<'pedidos' | 'produtos' | 'cardapio' | 'config' | 'cupons'>('pedidos');
+  const [activeTab, setActiveTab] = useState<'pedidos' | 'gerenciar_produtos' | 'config' | 'cupons'>('pedidos');
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderFilter, setOrderFilter] = useState<string>('todos');
   const [orderDateFilter, setOrderDateFilter] = useState<string>(new Date().toISOString().split('T')[0]);
   const [orderSortMethod, setOrderSortMethod] = useState<'desc' | 'asc'>('desc');
   const [orderSearchQuery, setOrderSearchQuery] = useState<string>('');
+  const [productSearchQuery, setProductSearchQuery] = useState<string>('');
+  const [isProductFormVisible, setIsProductFormVisible] = useState(false);
+  const [orderToCancelId, setOrderToCancelId] = useState<number | null>(null);
+  const [cancelReasonInput, setCancelReasonInput] = useState('');
   
   // Settings state
   const myCanteen = canteens.find(c => Number(c.id) === Number(currentUser?.canteen_id)) || canteens[0] || null;
@@ -2050,6 +3009,9 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
 
   const handleSaveSettings = async () => {
     if (!myCanteen) return;
+    if (openTime === closeTime) {
+      return showToast('O horário de fechamento não pode ser igual ao de abertura.');
+    }
     try {
       await fetch(`/api/canteens/${myCanteen.id}`, {
         method: 'PUT',
@@ -2256,7 +3218,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     setFormStock(p.stock.toString());
     setFormCanteenId(p.canteen_id?.toString() || '1');
     try { setFormTags(JSON.parse(p.tags || '[]')); } catch (e) { setFormTags([]); }
-    setActiveTab('cardapio');
+    setIsProductFormVisible(true);
   };
 
   const handleNewClick = () => {
@@ -2270,7 +3232,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     setFormEmoji('🍽️');
     setFormStock('10');
     setFormTags([]);
-    setActiveTab('cardapio');
+    setIsProductFormVisible(true);
   };
 
   const handleSaveProduct = async () => {
@@ -2308,7 +3270,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
         showToast('✅ Produto adicionado!');
       }
       fetchProducts();
-      setActiveTab('produtos');
+      setIsProductFormVisible(false);
     } catch (err) {
       showToast('Erro ao salvar produto.');
     }
@@ -2381,12 +3343,12 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     }
   };
 
-  const updateOrderStatus = async (id: number, status: string) => {
+  const updateOrderStatus = async (id: number, status: string, cancelReason?: string) => {
     try {
       await fetch(`/api/orders/${id}/status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
-        body: JSON.stringify({ status })
+        body: JSON.stringify({ status, cancel_reason: cancelReason })
       });
       fetchOrders();
       if (status === 'cancelado') {
@@ -2415,8 +3377,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
 
       <div className="gestor-tabs">
         <button className={`gestor-tab ${activeTab === 'pedidos' ? 'active' : ''}`} onClick={() => setActiveTab('pedidos')}>📋 Pedidos</button>
-        <button className={`gestor-tab ${activeTab === 'produtos' ? 'active' : ''}`} onClick={() => setActiveTab('produtos')}>🥘 Produtos</button>
-        <button className={`gestor-tab ${activeTab === 'cardapio' ? 'active' : ''}`} onClick={() => setActiveTab('cardapio')}>📝 Cardápio</button>
+        <button className={`gestor-tab ${activeTab === 'gerenciar_produtos' ? 'active' : ''}`} onClick={() => { setActiveTab('gerenciar_produtos'); setIsProductFormVisible(false); }}>🥘 Gerenciar Produtos</button>
         <button className={`gestor-tab ${activeTab === 'cupons' ? 'active' : ''}`} onClick={() => setActiveTab('cupons')}>🎟️ Cupons</button>
         <button className={`gestor-tab ${activeTab === 'config' ? 'active' : ''}`} onClick={() => setActiveTab('config')}>⚙️ Configurações</button>
       </div>
@@ -2498,26 +3459,26 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
           {isAddingCoupon && (
             <div className="card" style={{ marginBottom: 20 }}>
               <h4 style={{ marginBottom: 12 }}>{editingCouponId ? 'Editar Cupom' : 'Criar Cupom'}</h4>
-              <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 12, marginBottom: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
                 <div>
                   <label style={{ display: 'block', fontSize: 13, marginBottom: 4, fontWeight: 500 }}>Código <span style={{ color: 'red' }}>*</span></label>
-                  <input type="text" value={formCouponCode} onChange={e => setFormCouponCode(e.target.value.toUpperCase())} placeholder="EX: VERAO20" className="w-full" style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 8 }} />
+                  <input type="text" value={formCouponCode} onChange={e => setFormCouponCode(e.target.value.toUpperCase())} placeholder="EX: VERAO20" className="w-full" style={{ padding: '8px 12px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', borderRadius: 8 }} />
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 13, marginBottom: 4, fontWeight: 500 }}>Desconto (%) <span style={{ color: 'red' }}>*</span></label>
-                  <input type="number" min="1" max="100" value={formCouponPct} onChange={e => setFormCouponPct(e.target.value)} placeholder="15" className="w-full" style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 8 }} />
+                  <input type="number" min="1" max="100" value={formCouponPct} onChange={e => setFormCouponPct(e.target.value)} placeholder="15" className="w-full" style={{ padding: '8px 12px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', borderRadius: 8 }} />
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 13, marginBottom: 4, fontWeight: 500 }}>Uso Máximo (Opcional)</label>
-                  <input type="number" min="1" value={formCouponUses} onChange={e => setFormCouponUses(e.target.value)} placeholder="Vezes (deixe em branco p/ ∞)" className="w-full" style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 8 }} />
+                  <input type="number" min="1" value={formCouponUses} onChange={e => setFormCouponUses(e.target.value)} placeholder="Vezes (deixe em branco p/ ∞)" className="w-full" style={{ padding: '8px 12px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', borderRadius: 8 }} />
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 13, marginBottom: 4, fontWeight: 500 }}>Data Limite (Opcional)</label>
-                  <input type="date" value={formCouponDate} onChange={e => setFormCouponDate(e.target.value)} className="w-full" style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 8 }} />
+                  <input type="date" value={formCouponDate} onChange={e => setFormCouponDate(e.target.value)} className="w-full" style={{ padding: '8px 12px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', borderRadius: 8 }} />
                 </div>
                 <div>
                   <label style={{ display: 'block', fontSize: 13, marginBottom: 4, fontWeight: 500 }}>Valor Mínimo (Opcional)</label>
-                  <input type="number" min="0" step="0.01" value={formCouponMinVal} onChange={e => setFormCouponMinVal(e.target.value)} placeholder="0.00" className="w-full" style={{ padding: '8px 12px', border: '1px solid #ddd', borderRadius: 8 }} />
+                  <input type="number" min="0" step="0.01" value={formCouponMinVal} onChange={e => setFormCouponMinVal(e.target.value)} placeholder="0.00" className="w-full" style={{ padding: '8px 12px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', borderRadius: 8 }} />
                 </div>
               </div>
               <div style={{ display: 'flex', gap: 8, justifyContent: 'flex-end' }}>
@@ -2529,12 +3490,12 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
 
           <div className="product-list" style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
             {coupons.map(coupon => (
-              <div key={coupon.id} className="card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px' }}>
+              <div key={coupon.id} className="card coupon-card" style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '16px', gap: 12, flexWrap: 'wrap' }}>
                 <div>
                   <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
                     <span style={{ fontWeight: 'bold', fontSize: 16 }}>{coupon.code}</span>
                     <span className="tag tag-success">{coupon.discount_pct}% OFF</span>
-                    {!coupon.active && <span className="tag" style={{ background: '#fef2f2', color: '#ef4444' }}>Inativo</span>}
+                    {!coupon.active && <span className="tag" style={{ background: 'var(--danger-soft)', color: 'var(--danger)' }}>Inativo</span>}
                   </div>
                   <div style={{ fontSize: 13, color: 'var(--muted)', display: 'flex', gap: 12, flexWrap: 'wrap' }}>
                     <span>Usos: {coupon.used_count} {coupon.max_uses ? `/ ${coupon.max_uses}` : ''}</span>
@@ -2546,7 +3507,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                 <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
                   <button className="btn-outline btn-sm" onClick={() => handleEditCoupon(coupon)}>✏️</button>
                   <button className="btn-outline btn-sm" onClick={() => toggleCouponStatus(coupon)}>
-                    {coupon.active ? 'Apenas Desativar' : 'Reativar'}
+                    {coupon.active ? 'Desativar' : 'Ativar'}
                   </button>
                   {deleteCouponId === coupon.id ? (
                     <div style={{ display: 'flex', gap: 4 }}>
@@ -2571,36 +3532,39 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
 
       {activeTab === 'pedidos' && (
         <div className="gestor-panel active">
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }}>
-            <span style={{ fontSize: 14, fontWeight: 500 }}>Filtros:</span>
+          <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap', alignItems: 'center' }} className="gestor-filters-container">
+            <span style={{ fontSize: 14, fontWeight: 500, display: 'block', width: '100%', marginBottom: 4 }}>Filtros:</span>
             <input 
               type="text" 
               placeholder="Buscar por cliente ou pedido..."
               value={orderSearchQuery}
               onChange={e => setOrderSearchQuery(e.target.value)}
-              style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', fontSize: 14, minWidth: 200 }}
+              className="form-input"
+              style={{ padding: '8px 12px', flex: '1 1 200px' }}
             />
             <input 
               type="date" 
               value={orderDateFilter} 
               onChange={e => setOrderDateFilter(e.target.value)} 
-              style={{ padding: '6px 10px', borderRadius: 6, border: '1px solid #ddd', fontSize: 14 }}
+              className="form-input"
+              style={{ padding: '8px 12px', flex: '1 1 150px' }}
             />
-            <button className="btn-outline btn-sm" onClick={() => setOrderDateFilter('')}>Limpar Data</button>
+            <button className="btn-outline btn-sm" style={{ flex: '1 1 auto' }} onClick={() => setOrderDateFilter('')}>Limpar Data</button>
             <button 
               className="btn-outline btn-sm" 
+              style={{ flex: '1 1 auto' }}
               onClick={() => setOrderSortMethod(prev => prev === 'desc' ? 'asc' : 'desc')}
             >
-               Ordenação: {orderSortMethod === 'desc' ? 'Recentes Primeiro ↓' : 'Antigos Primeiro ↑'}
+               Ordenação: {orderSortMethod === 'desc' ? 'Recentes ↓' : 'Antigos ↑'}
             </button>
           </div>
-          <div style={{ display: 'flex', gap: 8, marginBottom: 16, flexWrap: 'wrap' }}>
-            <button className={`btn-sm ${orderFilter === 'todos' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('todos')}>Todos</button>
-            <button className={`btn-sm ${orderFilter === 'aguardando' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('aguardando')}>Aguardando</button>
-            <button className={`btn-sm ${orderFilter === 'preparo' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('preparo')}>Em Preparo</button>
-            <button className={`btn-sm ${orderFilter === 'pronto' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('pronto')}>Pronto</button>
-            <button className={`btn-sm ${orderFilter === 'retirado' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('retirado')}>Retirado</button>
-            <button className={`btn-sm ${orderFilter === 'cancelado' ? 'btn-orange' : 'btn-outline'}`} onClick={() => setOrderFilter('cancelado')}>Cancelados</button>
+          <div className="gestor-tabs" style={{ marginBottom: 16 }}>
+            <button className={`gestor-tab ${orderFilter === 'todos' ? 'active' : ''}`} onClick={() => setOrderFilter('todos')}>Todos</button>
+            <button className={`gestor-tab ${orderFilter === 'aguardando' ? 'active' : ''}`} onClick={() => setOrderFilter('aguardando')}>Aguardando</button>
+            <button className={`gestor-tab ${orderFilter === 'preparo' ? 'active' : ''}`} onClick={() => setOrderFilter('preparo')}>Em Preparo</button>
+            <button className={`gestor-tab ${orderFilter === 'pronto' ? 'active' : ''}`} onClick={() => setOrderFilter('pronto')}>Pronto</button>
+            <button className={`gestor-tab ${orderFilter === 'retirado' ? 'active' : ''}`} onClick={() => setOrderFilter('retirado')}>Retirado</button>
+            <button className={`gestor-tab ${orderFilter === 'cancelado' ? 'active' : ''}`} onClick={() => setOrderFilter('cancelado')}>Cancelados</button>
           </div>
           <div className="orders-list">
             {orders.length === 0 ? (
@@ -2615,31 +3579,34 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                 })
                 .filter(o => {
                   if (!orderDateFilter) return true;
-                  return o.created_at.startsWith(orderDateFilter);
+                  const orderDate = new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // en-CA gives YYYY-MM-DD
+                  return orderDate === orderDateFilter;
                 })
                 .filter(o => orderFilter === 'todos' || o.status === orderFilter)
                 .sort((a, b) => {
-                  const tA = new Date(a.created_at).getTime();
-                  const tB = new Date(b.created_at).getTime();
+                  const tA = new Date(a.created_at.replace(' ', 'T') + 'Z').getTime();
+                  const tB = new Date(b.created_at.replace(' ', 'T') + 'Z').getTime();
                   return orderSortMethod === 'desc' ? tB - tA : tA - tB;
                 })
                 .map(order => {
                   const items: CartItem[] = JSON.parse(order.items);
                   const itemsText = items.map(i => `${i.name} × ${i.qty}`).join(' + ');
-                  const orderTime = new Date(order.created_at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' });
+                  const orderTime = formatBrazilTime(order.created_at);
+                  const orderDateFormatted = formatBrazilDate(order.created_at);
                   
                   return (
                     <div className="order-card" key={order.id}>
                       <div>
                         <div className="order-id">
-                          Pedido {order.code} <span style={{ color: 'var(--muted)', fontSize: 12, fontWeight: 'normal', marginLeft: 8 }}>🕒 {orderTime}</span>
+                          Pedido {order.code} <span style={{ color: 'var(--muted)', fontSize: 12, fontWeight: 'normal', marginLeft: 8 }}>📅 {orderDateFormatted} às {orderTime}</span>
                         </div>
                         <div className="order-meta">{order.user_name} · {itemsText} · R$ {order.total.toFixed(2).replace('.', ',')}</div>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
                         {new StatusPedidoContexto(order.status).comportamento_renderGestorActions(order.id, {
                           updateOrderStatus,
-                          setDeleteOrderConfirmId
+                          setDeleteOrderConfirmId,
+                          promptCancelReason: (id) => setOrderToCancelId(id)
                         })}
                       </div>
                     </div>
@@ -2650,14 +3617,31 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
         </div>
       )}
 
-      {activeTab === 'produtos' && (
+      {activeTab === 'gerenciar_produtos' && !isProductFormVisible && (
         <div className="gestor-panel active">
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 20 }}>
             <h3>Produtos cadastrados</h3>
             <button className="btn-orange btn-sm" onClick={handleNewClick}>+ Novo Produto</button>
           </div>
+          <div style={{ marginBottom: 16 }}>
+            <input 
+              type="text" 
+              placeholder="Pesquisar por nome, categoria ou tags..." 
+              value={productSearchQuery}
+              onChange={(e) => setProductSearchQuery(e.target.value)}
+              className="form-input"
+              style={{ width: '100%', maxWidth: 400 }}
+            />
+          </div>
           <div style={{ display: 'grid', gap: 12 }}>
-            {filteredProducts.map(p => (
+            {filteredProducts
+              .filter(p => 
+                productSearchQuery === '' || 
+                p.name.toLowerCase().includes(productSearchQuery.toLowerCase()) || 
+                p.cat.toLowerCase().includes(productSearchQuery.toLowerCase()) ||
+                (p.tags && p.tags.toLowerCase().includes(productSearchQuery.toLowerCase()))
+              )
+              .map(p => (
               <div className="order-card" key={p.id}>
                 <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
                   <span style={{ fontSize: 28 }}>{p.emoji}</span>
@@ -2666,7 +3650,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                     <div className="order-meta">{p.cat} · R$ {p.price.toFixed(2).replace('.', ',')} · Estoque: {p.stock}</div>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: 8, alignItems: 'center', flexWrap: 'wrap' }}>
+                <div className="order-actions" style={{ flexWrap: 'wrap', marginTop: 8 }}>
                   {p.active === 1 ? (
                     <>
                       <span className="tag tag-success">Disponível</span>
@@ -2690,10 +3674,19 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
         </div>
       )}
 
-      {activeTab === 'cardapio' && (
+      {activeTab === 'gerenciar_produtos' && isProductFormVisible && (
         <div className="gestor-panel active">
           <div className="card">
-            <h3 style={{ marginBottom: 16 }}>{editingId ? 'Editar Produto' : 'Adicionar ao Cardápio'}</h3>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: 16 }}>
+              <button 
+                className="btn-secondary btn-sm" 
+                style={{ marginRight: 12, padding: '4px 8px' }} 
+                onClick={() => setIsProductFormVisible(false)}
+              >
+                ← Voltar
+              </button>
+              <h3 style={{ margin: 0 }}>{editingId ? 'Editar Produto' : 'Adicionar ao Cardápio'}</h3>
+            </div>
             <div className="form">
               <label style={{ position: 'relative' }}>Emoji
                 <div style={{ display: 'flex', gap: 8 }}>
@@ -2852,6 +3845,49 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
           </div>
         </div>
       )}
+
+      <AnimatePresence>
+        {orderToCancelId !== null && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              background: 'rgba(0,0,0,0.5)', zIndex: 9999,
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              padding: 20
+            }}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              className="card"
+              style={{ width: '100%', maxWidth: 400 }}
+            >
+              <h3 style={{ marginBottom: 12 }}>Motivo do Cancelamento</h3>
+              <p style={{ color: 'var(--muted)', fontSize: 14, marginBottom: 16 }}>
+                Informe o aluno sobre o motivo deste cancelamento.
+              </p>
+              <textarea
+                value={cancelReasonInput}
+                onChange={e => setCancelReasonInput(e.target.value)}
+                placeholder="Exemplo: Faltou ingrediente, já fechamos..."
+                style={{ width: '100%', minHeight: 100, padding: 12, border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', borderRadius: 8, marginBottom: 16, fontFamily: 'inherit' }}
+              />
+              <div style={{ display: 'flex', gap: 12 }}>
+                <button className="btn-secondary" style={{ flex: 1 }} onClick={() => { setOrderToCancelId(null); setCancelReasonInput(''); }}>Voltar</button>
+                <button className="btn-danger" style={{ flex: 1 }} onClick={() => { 
+                  updateOrderStatus(orderToCancelId, 'cancelado', cancelReasonInput);
+                  setOrderToCancelId(null);
+                  setCancelReasonInput('');
+                }}>Confirmar Cancelamento</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <AnimatePresence>
         {deleteCatConfirmId !== null && (
