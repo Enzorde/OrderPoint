@@ -3559,16 +3559,25 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
             </button>
           </div>
           <div className="gestor-tabs" style={{ marginBottom: 16 }}>
-            <button className={`gestor-tab ${orderFilter === 'todos' ? 'active' : ''}`} onClick={() => setOrderFilter('todos')}>Todos</button>
+            <button className={`gestor-tab ${orderFilter === 'todos' ? 'active' : ''}`} onClick={() => setOrderFilter('todos')}>Todos (Ativos)</button>
             <button className={`gestor-tab ${orderFilter === 'aguardando' ? 'active' : ''}`} onClick={() => setOrderFilter('aguardando')}>Aguardando</button>
             <button className={`gestor-tab ${orderFilter === 'preparo' ? 'active' : ''}`} onClick={() => setOrderFilter('preparo')}>Em Preparo</button>
             <button className={`gestor-tab ${orderFilter === 'pronto' ? 'active' : ''}`} onClick={() => setOrderFilter('pronto')}>Pronto</button>
             <button className={`gestor-tab ${orderFilter === 'retirado' ? 'active' : ''}`} onClick={() => setOrderFilter('retirado')}>Retirado</button>
             <button className={`gestor-tab ${orderFilter === 'cancelado' ? 'active' : ''}`} onClick={() => setOrderFilter('cancelado')}>Cancelados</button>
+            <button className={`gestor-tab ${orderFilter === 'historico' ? 'active' : ''}`} onClick={() => setOrderFilter('historico')}>Histórico</button>
           </div>
+          {orderFilter === 'historico' && (
+            <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-secondary)', marginBottom: 16, border: '1px solid var(--line)' }}>
+              <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
+                O Histórico contém todos os pedidos finalizados (Retirados, Cancelados). 
+                Utilize a barra de busca acima para filtrar por usuário, ou selecione uma data.
+              </p>
+            </div>
+          )}
           <div className="orders-list">
             {orders.length === 0 ? (
-              <p style={{ color: 'var(--muted)' }}>Nenhum pedido ativo no momento.</p>
+              <p style={{ color: 'var(--muted)' }}>Nenhum pedido no momento.</p>
             ) : (
               orders
                 .filter(o => Number(o.canteen_id || 1) === Number(myCanteen?.id))
@@ -3582,7 +3591,15 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                   const orderDate = new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // en-CA gives YYYY-MM-DD
                   return orderDate === orderDateFilter;
                 })
-                .filter(o => orderFilter === 'todos' || o.status === orderFilter)
+                .filter(o => {
+                  if (orderFilter === 'todos') {
+                    return o.status === 'aguardando' || o.status === 'preparo' || o.status === 'pronto';
+                  }
+                  if (orderFilter === 'historico') {
+                    return o.status === 'retirado' || o.status === 'cancelado';
+                  }
+                  return o.status === orderFilter;
+                })
                 .sort((a, b) => {
                   const tA = new Date(a.created_at.replace(' ', 'T') + 'Z').getTime();
                   const tB = new Date(b.created_at.replace(' ', 'T') + 'Z').getTime();
