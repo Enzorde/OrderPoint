@@ -1,6 +1,8 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
+import { globalEventBus, OrderStatusFactory, CartItem, showToast as globalShowToast, OrderActionConfig } from './patterns';
 import EmojiPicker from 'emoji-picker-react';
+import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 
 function LazyMedia({ imageUrl, emoji, alt, className, style, onClick, onMouseEnter, onMouseLeave, title }: { imageUrl?: string, emoji?: string, alt?: string, className?: string, style?: React.CSSProperties, onClick?: () => void, onMouseEnter?: (e: React.MouseEvent) => void, onMouseLeave?: (e: React.MouseEvent) => void, title?: string }) {
   const [loaded, setLoaded] = useState(false);
@@ -70,17 +72,6 @@ type Tag = {
   canteen_id: number;
 };
 
-type CartItem = {
-  id: number;
-  name: string;
-  price: number;
-  emoji: string;
-  qty: number;
-  canteen_id?: number;
-  isReward?: boolean;
-  points_price?: number;
-};
-
 type Coupon = {
   id: number;
   code: string;
@@ -105,6 +96,8 @@ type Canteen = {
   avg_rating: number;
   rating_count: number;
   points_enabled?: number;
+  maintenance_mode?: number;
+  global_warning?: string;
   image_url?: string;
 };
 
@@ -128,105 +121,6 @@ type Category = {
 
 type Screen = 'login' | 'login-gestor' | 'cadastro' | 'esqueci-senha' | 'cantinas' | 'catalogo' | 'carrinho' | 'confirmacao' | 'status' | 'gestor' | 'meus-pedidos' | 'perfil' | 'pontos' | 'superadmin';
 
-// --- Padrão de Projeto: STRATEGY (Conforme PDF) ---
-interface GestorCallbacks {
-  updateOrderStatus: (id: number, status: string, cancelReason?: string) => void;
-  setDeleteOrderConfirmId: (id: number) => void;
-  promptCancelReason?: (id: number) => void;
-}
-
-interface Padrao_StatusPedido {
-  mostrarTexto(): string;
-  mostrarCor(): { background?: string; color?: string; className?: string };
-  renderGestorActions(orderId: number, callbacks: GestorCallbacks): React.ReactNode;
-}
-
-class Status_Aguardando implements Padrao_StatusPedido {
-  mostrarTexto() { return '⏳ Aguardando Cantina'; }
-  mostrarCor() { return { background: 'var(--primary-soft)', color: 'var(--primary)' }; }
-  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
-    return (
-      <React.Fragment>
-        <span className="tag" style={{ background: 'var(--primary-soft)', color: 'var(--primary)' }}>Aguardando</span>
-        <div className="order-actions">
-          <button className="btn-orange btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'preparo')}>Aceitar</button>
-          <button className="btn-danger btn-sm" onClick={() => callbacks.promptCancelReason ? callbacks.promptCancelReason(orderId) : callbacks.updateOrderStatus(orderId, 'cancelado')}>Recusar</button>
-        </div>
-      </React.Fragment>
-    );
-  }
-}
-
-class Status_Preparo implements Padrao_StatusPedido {
-  mostrarTexto() { return '👨‍🍳 Em Preparo'; }
-  mostrarCor() { return { background: 'var(--orange-soft)', color: 'var(--orange)' }; }
-  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
-    return (
-      <React.Fragment>
-        <span className="tag tag-orange">Em Preparo</span>
-        <div className="order-actions">
-          <button className="btn-success btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'pronto')}>Pronto!</button>
-          <button className="btn-danger btn-sm" onClick={() => callbacks.promptCancelReason ? callbacks.promptCancelReason(orderId) : callbacks.updateOrderStatus(orderId, 'cancelado')}>Cancelar</button>
-        </div>
-      </React.Fragment>
-    );
-  }
-}
-
-class Status_Pronto implements Padrao_StatusPedido {
-  mostrarTexto() { return '🔔 Pronto para Retirada'; }
-  mostrarCor() { return { background: 'var(--success-soft)', color: 'var(--success)' }; }
-  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
-    return (
-      <React.Fragment>
-        <span className="tag tag-success">Pronto para Retirada</span>
-        <div className="order-actions">
-          <button className="btn-success btn-sm" onClick={() => callbacks.updateOrderStatus(orderId, 'retirado')}>Marcar como Retirado</button>
-        </div>
-      </React.Fragment>
-    );
-  }
-}
-
-class Status_Retirado implements Padrao_StatusPedido {
-  mostrarTexto() { return '✅ Retirado'; }
-  mostrarCor() { return { background: 'var(--card)', color: 'var(--muted)' }; }
-  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
-    return (
-      <React.Fragment>
-        <span className="tag" style={{ background: 'var(--card)', color: 'var(--muted)' }}>Retirado</span>
-        <div className="order-actions">
-          <button className="btn-danger btn-sm" onClick={() => callbacks.setDeleteOrderConfirmId(orderId)}>Excluir</button>
-        </div>
-      </React.Fragment>
-    );
-  }
-}
-
-class Status_Cancelado implements Padrao_StatusPedido {
-  mostrarTexto() { return '❌ Cancelado'; }
-  mostrarCor() { return { background: 'var(--danger-soft)', color: 'var(--danger)' }; }
-  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
-    return (
-      <React.Fragment>
-        <span className="tag tag-danger">Cancelado</span>
-        <div className="order-actions">
-          <button className="btn-danger btn-sm" onClick={() => callbacks.setDeleteOrderConfirmId(orderId)}>Excluir</button>
-        </div>
-      </React.Fragment>
-    );
-  }
-}
-
-class Status_Outro implements Padrao_StatusPedido {
-  constructor(private status: string) {}
-  mostrarTexto() { return this.status; }
-  mostrarCor() { return {}; }
-  renderGestorActions(orderId: number, callbacks: GestorCallbacks) {
-    return <React.Fragment></React.Fragment>;
-  }
-}
-
 export const formatBrazilTime = (dateString: string) => {
   const d = dateString.includes('Z') ? new Date(dateString) : new Date(dateString.replace(' ', 'T') + 'Z');
   return d.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
@@ -236,30 +130,6 @@ export const formatBrazilDate = (dateString: string) => {
   const d = dateString.includes('Z') ? new Date(dateString) : new Date(dateString.replace(' ', 'T') + 'Z');
   return d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 };
-
-class StatusPedidoContexto {
-  private m_Padrao_Status: Padrao_StatusPedido;
-
-  constructor(status: string) {
-    switch(status) {
-      case 'aguardando': this.m_Padrao_Status = new Status_Aguardando(); break;
-      case 'preparo': this.m_Padrao_Status = new Status_Preparo(); break;
-      case 'pronto': this.m_Padrao_Status = new Status_Pronto(); break;
-      case 'retirado': this.m_Padrao_Status = new Status_Retirado(); break;
-      case 'cancelado': this.m_Padrao_Status = new Status_Cancelado(); break;
-      default: this.m_Padrao_Status = new Status_Outro(status); break;
-    }
-  }
-
-  set_Padrao_Status(novoStatus: Padrao_StatusPedido) {
-    this.m_Padrao_Status = novoStatus;
-  }
-
-  comportamento_mostrarTexto() { return this.m_Padrao_Status.mostrarTexto(); }
-  comportamento_mostrarCor() { return this.m_Padrao_Status.mostrarCor(); }
-  comportamento_renderGestorActions(orderId: number, callbacks: GestorCallbacks) { return this.m_Padrao_Status.renderGestorActions(orderId, callbacks); }
-}
-// --- Fim Padrão Strategy ---
 
 const playNotificationSound = () => {
   try {
@@ -351,7 +221,7 @@ function ScreenPontos({ goTo, products, canteens, currentUser, setCurrentUser, s
                 <h3 style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text)' }}>
                   <span>{canteen.emoji}</span> {canteen.name}
                 </h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(250px, 1fr))', gap: 16 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 250px), 1fr))', gap: 16 }}>
                   {canteenProducts.map(product => {
                     const isAffordable = (points - currentRewardPointsInCart) >= (product.points_price || 0);
                     return (
@@ -524,6 +394,39 @@ function ScreenPerfil({ goTo, currentUser, setCurrentUser, showToast }: { goTo: 
   );
 }
 
+function ToastNotifier() {
+  const [toastMsg, setToastMsg] = useState<string | null>(null);
+
+  useEffect(() => {
+    return globalEventBus.subscribe('TOAST_NOTIFICATION', (msg: string) => {
+      setToastMsg(msg);
+      setTimeout(() => setToastMsg(null), 3000);
+    });
+  }, []);
+
+  return (
+    <AnimatePresence>
+      {toastMsg && (
+        <motion.div
+          initial={{ opacity: 0, y: 20 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: 20 }}
+          style={{
+            position: 'fixed', bottom: 24, right: 24,
+            background: 'var(--card)', color: 'var(--text)',
+            padding: '12px 20px', borderRadius: 12,
+            fontWeight: 'bold', fontSize: 14,
+            zIndex: 9999,
+            boxShadow: '0 8px 32px rgba(0,0,0,0.12)'
+          }}
+        >
+          {toastMsg}
+        </motion.div>
+      )}
+    </AnimatePresence>
+  );
+}
+
 export default function App() {
   const [currentScreen, setCurrentScreen] = useState<Screen>(() => {
     const saved = localStorage.getItem('currentUser');
@@ -554,7 +457,6 @@ export default function App() {
     return [];
   });
   const [orderCode, setOrderCode] = useState<string>('');
-  const [toastMsg, setToastMsg] = useState<string | null>(null);
   const [couponCodeState, setCouponCodeState] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
   const [couponError, setCouponError] = useState('');
@@ -563,6 +465,7 @@ export default function App() {
   const [categories, setCategories] = useState<Category[]>([]);
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedCanteen, setSelectedCanteen] = useState<Canteen | null>(null);
+  const [globalSettings, setGlobalSettings] = useState<Record<string, string>>({});
 
   const [isDarkMode, setIsDarkMode] = useState<boolean>(() => {
     const savedTheme = localStorage.getItem('cantinahub_theme');
@@ -613,6 +516,14 @@ export default function App() {
     }
   }, [currentUser?.id]);
 
+  const fetchGlobalSettings = async () => {
+    try {
+      const res = await fetch('/api/settings', { cache: 'no-store' });
+      const data = await res.json();
+      setGlobalSettings(data);
+    } catch(err) {}
+  };
+
   const fetchProducts = async () => {
     try {
       const res = await fetch('/api/products');
@@ -648,12 +559,14 @@ export default function App() {
     fetchCanteens();
     fetchCategories();
     fetchTags();
+    fetchGlobalSettings();
     
     // Polling para manter o catálogo e estoque atualizados em tempo real
     const interval = setInterval(() => {
       fetchProducts();
       fetchCanteens();
       fetchTags();
+      fetchGlobalSettings();
     }, 5000);
     
     return () => clearInterval(interval);
@@ -675,10 +588,7 @@ export default function App() {
     window.scrollTo(0, 0);
   };
 
-  const showToast = (msg: string) => {
-    setToastMsg(msg);
-    setTimeout(() => setToastMsg(null), 2000);
-  };
+  const showToast = globalShowToast;
 
   const addToCart = (product: Product & { isReward?: boolean }) => {
     const existing = cart.find(i => i.id === product.id && i.isReward === product.isReward);
@@ -872,8 +782,38 @@ export default function App() {
 
   const cartCount = cart.reduce((sum, item) => sum + item.qty, 0);
 
+  if (globalSettings?.global_maintenance === '1' && (!currentUser || currentUser.role !== 'superadmin')) {
+    if (currentScreen !== 'login') {
+       return (
+         <div className="page" style={{ height: '100vh', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', textAlign: 'center', padding: 20 }}>
+           <h1 style={{ fontSize: 48, marginBottom: 16 }}>🚧</h1>
+           <h2 style={{ marginBottom: 12 }}>Sistema em Manutenção</h2>
+           <p style={{ color: 'var(--muted)', maxWidth: 400, lineHeight: 1.5, marginBottom: 24 }}>
+             O CantinaHUB está temporariamente indisponível para atualizações importantes. Por favor, retorne mais tarde.
+           </p>
+           {currentUser && (
+             <button className="btn-secondary" onClick={logout}>Sair da Conta</button>
+           )}
+           {!currentUser && (
+             <button className="btn-secondary" onClick={() => setCurrentScreen('login')}>Voltar ao Login</button>
+           )}
+         </div>
+       );
+    }
+  }
+
   return (
     <>
+      {globalSettings?.global_warning && globalSettings.global_warning.trim() !== '' && (
+        <div style={{ background: '#fef2f2', borderBottom: '1px solid #fca5a5', color: '#b91c1c', padding: 12, fontSize: 14, textAlign: 'center', zIndex: 100, position: 'relative' }}>
+          ⚠️ <strong>Aviso da Facens:</strong> {globalSettings.global_warning}
+        </div>
+      )}
+      {globalSettings?.global_maintenance === '1' && (
+        <div style={{ background: '#fffbeb', borderBottom: '1px solid #fcd34d', color: '#b45309', padding: 12, fontSize: 14, textAlign: 'center', zIndex: 100, position: 'relative' }}>
+          ⛔ <strong>Sistema em manutenção:</strong> {currentUser?.role === 'superadmin' ? 'Você é um superadmin, pode navegar.' : 'O sistema está bloqueado para novos pedidos e logins no momento.'}
+        </div>
+      )}
       {showNavbar && (
         <nav id="navbar">
           <div className="nav-logo" onClick={() => goTo(currentUser?.role === 'manager' ? 'gestor' : 'cantinas')} style={{ cursor: 'pointer' }}>🍽️ OrderPoint</div>
@@ -928,35 +868,17 @@ export default function App() {
           {currentScreen === 'esqueci-senha' && <ScreenEsqueciSenha goTo={goTo} />}
           {currentScreen === 'cantinas' && <ScreenCantinas goTo={goTo} canteens={canteens} setSelectedCanteen={setSelectedCanteen} />}
           {currentScreen === 'catalogo' && <ScreenCatalogo goTo={goTo} addToCart={addToCart} products={products} selectedCanteen={selectedCanteen} categories={categories} tags={tags} currentUser={currentUser} cart={cart} showToast={showToast} />}
-          {currentScreen === 'carrinho' && <ScreenCarrinho goBack={handleGoBackFromCart} cart={cart} changeQty={changeQty} clearCart={clearCart} finalizarPedido={finalizarPedido} couponCodeState={couponCodeState} setCouponCodeState={setCouponCodeState} handleApplyCoupon={handleApplyCoupon} appliedCoupon={appliedCoupon} couponError={couponError} setCouponError={setCouponError} />}
+          {currentScreen === 'carrinho' && <ScreenCarrinho goBack={handleGoBackFromCart} cart={cart} changeQty={changeQty} clearCart={clearCart} finalizarPedido={finalizarPedido} couponCodeState={couponCodeState} setCouponCodeState={setCouponCodeState} handleApplyCoupon={handleApplyCoupon} appliedCoupon={appliedCoupon} couponError={couponError} setCouponError={setCouponError} selectedCanteen={selectedCanteen} />}
           {currentScreen === 'confirmacao' && <ScreenConfirmacao goTo={goTo} orderCode={orderCode} />}
           {currentScreen === 'status' && <ScreenStatus goTo={goTo} orderCode={orderCode} />}
           {currentScreen === 'meus-pedidos' && <ScreenMeusPedidos goTo={goTo} currentUser={currentUser} setOrderCode={setOrderCode} showToast={showToast} fetchCanteens={fetchCanteens} />}
           {currentScreen === 'gestor' && <ScreenGestor products={products} tags={tags} fetchTags={fetchTags} currentUser={currentUser} fetchProducts={fetchProducts} showToast={showToast} canteens={canteens} fetchCanteens={fetchCanteens} categories={categories} fetchCategories={fetchCategories} />}
-          {currentScreen === 'superadmin' && <ScreenSuperadmin goTo={goTo} currentUser={currentUser} showToast={showToast} fetchCanteens={fetchCanteens} />}
+          {currentScreen === 'superadmin' && <ScreenSuperadmin goTo={goTo} currentUser={currentUser} showToast={showToast} fetchCanteens={fetchCanteens} globalSettings={globalSettings} fetchGlobalSettings={fetchGlobalSettings} />}
           {currentScreen === 'perfil' && <ScreenPerfil goTo={goTo} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} />}
           {currentScreen === 'pontos' && <ScreenPontos goTo={goTo} products={products} canteens={canteens} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} addToCart={addToCart} cart={cart} />}
         </motion.div>
       </AnimatePresence>
-
-      <AnimatePresence>
-        {toastMsg && (
-          <motion.div
-            initial={{ opacity: 0, y: 20 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: 20 }}
-            style={{
-              position: 'fixed', bottom: 24, right: 24,
-              background: 'var(--card)', color: 'var(--text)',
-              padding: '12px 20px', borderRadius: 12,
-              fontWeight: 'bold', fontSize: 14,
-              zIndex: 9999
-            }}
-          >
-            {toastMsg}
-          </motion.div>
-        )}
-      </AnimatePresence>
+      <ToastNotifier />
     </>
   );
 }
@@ -1128,7 +1050,7 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
   );
 }
 
-function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens }: { goTo: (s: Screen) => void, currentUser: User | null, showToast: (msg: string) => void, fetchCanteens: () => void }) {
+function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalSettings, fetchGlobalSettings }: { goTo: (s: Screen) => void, currentUser: User | null, showToast: (msg: string) => void, fetchCanteens: () => void, globalSettings: Record<string, string>, fetchGlobalSettings: () => void }) {
   const [activeTab, setActiveTab] = useState<'gerenciar_usuarios' | 'gerenciar_cantinas' | 'criar_cantina' | 'criar_conta' | 'configuracoes'>('gerenciar_usuarios');
   const [canteens, setCanteens] = useState<Canteen[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -1138,6 +1060,40 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens }: { goT
   const [newManagerEmail, setNewManagerEmail] = useState('');
   const [newManagerSenha, setNewManagerSenha] = useState('');
   const [newManagerCanteen, setNewManagerCanteen] = useState<number | ''>('');
+  
+  const [settingsMaintenance, setSettingsMaintenance] = useState(false);
+  const [settingsWarning, setSettingsWarning] = useState('');
+
+  useEffect(() => {
+    if (globalSettings) {
+      setSettingsMaintenance(globalSettings.global_maintenance === '1');
+      setSettingsWarning(globalSettings.global_warning || '');
+    }
+  }, [globalSettings]);
+
+  const saveSettings = async () => {
+    try {
+      const res = await fetch('/api/settings', {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          'X-User-Id': currentUser?.id?.toString() || ''
+        },
+        body: JSON.stringify({
+          global_maintenance: settingsMaintenance,
+          global_warning: settingsWarning
+        })
+      });
+      if (res.ok) {
+        showToast('✅ Configurações globais salvas!');
+        fetchGlobalSettings();
+      } else {
+        showToast('Erro ao salvar configurações.');
+      }
+    } catch (e) {
+      showToast('Erro de conexão ao salvar.');
+    }
+  };
   const [newManagerRole, setNewManagerRole] = useState<'manager' | 'superadmin' | 'student'>('manager');
   const [newManagerMatricula, setNewManagerMatricula] = useState('');
 
@@ -1400,7 +1356,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens }: { goT
                           <td style={{ padding: '12px 16px', fontSize: 14 }}>{user.id}</td>
                           {editingUser === user.id ? (
                             <td colSpan={4} style={{ padding: '12px 16px' }}>
-                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 12 }}>
+                              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 200px), 1fr))', gap: 12 }}>
                                 <label className="form-label">Nome<input type="text" className="form-input" value={editUserForm.name || ''} onChange={e => setEditUserForm({...editUserForm, name: e.target.value})} /></label>
                                 <label className="form-label">E-mail<input type="email" className="form-input" value={editUserForm.email || ''} onChange={e => setEditUserForm({...editUserForm, email: e.target.value})} /></label>
                                 <label className="form-label">Tipo
@@ -1474,7 +1430,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens }: { goT
                       {editingCanteen === c.id ? (
                         <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
                           <h4 style={{ fontWeight: 'bold' }}>Editar Parâmetros da Cantina</h4>
-                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12 }}>
+                          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 12 }}>
                             <label className="form-label">Nome<input type="text" className="form-input" value={editCanteenForm.name || ''} onChange={e => setEditCanteenForm({...editCanteenForm, name: e.target.value})} /></label>
                             <label className="form-label">Emoji<input type="text" className="form-input" value={editCanteenForm.emoji || ''} onChange={e => setEditCanteenForm({...editCanteenForm, emoji: e.target.value})} /></label>
                             <label className="form-label">Localização<input type="text" className="form-input" value={editCanteenForm.location || ''} onChange={e => setEditCanteenForm({...editCanteenForm, location: e.target.value})} /></label>
@@ -1489,6 +1445,16 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens }: { goT
                             </label>
                             <p style={{ margin: '4px 0 0 30px', fontSize: 13, color: 'var(--muted)' }}>Alunos poderão acumular e resgatar pontos nesta cantina.</p>
                           </div>
+                          <div style={{ padding: 12, border: '1px solid var(--line)', borderRadius: 8, marginTop: 12 }}>
+                            <label style={{ display: 'flex', alignItems: 'center', gap: 12, cursor: 'pointer', margin: 0 }}>
+                              <input type="checkbox" checked={editCanteenForm.maintenance_mode === 1} onChange={e => setEditCanteenForm({...editCanteenForm, maintenance_mode: e.target.checked ? 1 : 0})} style={{ width: 18, height: 18 }} />
+                              <span style={{ fontWeight: 500 }}>Modo Manutenção</span>
+                            </label>
+                            <p style={{ margin: '4px 0 0 30px', fontSize: 13, color: 'var(--muted)' }}>Bloqueia a compra de itens nesta cantina temporariamente.</p>
+                          </div>
+                          <label className="form-label" style={{ marginTop: 12 }}>Aviso Global
+                            <textarea className="form-input" value={editCanteenForm.global_warning || ''} onChange={e => setEditCanteenForm({...editCanteenForm, global_warning: e.target.value})} rows={2} placeholder="Ex: Faltou energia..." />
+                          </label>
                           <div style={{ display: 'flex', gap: 8, marginTop: 12 }}>
                             <button className="btn-success btn-sm" onClick={() => handleUpdateCanteen(c.id)}>Salvar Alterações</button>
                             <button className="btn-secondary btn-sm" onClick={() => setEditingCanteen(null)}>Cancelar</button>
@@ -1543,7 +1509,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens }: { goT
                 <label className="form-label">Cor (Hexadecimal)
                   <input type="color" className="form-input" value={newCanteenColor} onChange={e => setNewCanteenColor(e.target.value)} style={{ padding: 4, height: 44 }} />
                 </label>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 12 }}>
+                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 12, marginBottom: 12 }}>
                   <label className="form-label">Abertura
                     <input type="time" className="form-input" value={newCanteenOpenTime} onChange={e => setNewCanteenOpenTime(e.target.value)} />
                   </label>
@@ -1611,30 +1577,37 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens }: { goT
 
           {activeTab === 'configuracoes' && (
             <div style={{ padding: 24, background: 'var(--surface)', borderRadius: 16, border: '1px solid var(--line)' }}>
-              <h3 style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 16 }}>Configurações Gerais</h3>
-              <p style={{ color: 'var(--muted)', marginBottom: 24 }}>Nesta seção, poderemos implementar diversas funcionalidades futuras para o controle global do CantinaHUB:</p>
+              <h3 style={{ fontSize: 18, fontWeight: 'bold', marginBottom: 16 }}>Configurações Globais do HUB</h3>
               
-              <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(300px, 1fr))' }}>
+              <div style={{ display: 'grid', gap: 16, gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 300px), 1fr))', marginBottom: 24 }}>
                 <div className="card" style={{ padding: 16 }}>
-                  <h4>🚧 Modo de Manutenção</h4>
-                  <p style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8 }}>Desative temporariamente o acesso aos alunos para realizar atualizações de sistema. Gerentes e Superadmins continuariam com acesso normal.</p>
+                  <h4>🚧 Modo de Manutenção Global</h4>
+                  <p style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8, marginBottom: 16 }}>Bloqueia o login e o acesso para todos os alunos e gestores. Apenas superadmins conseguirão entrar no sistema.</p>
+                  <label style={{ display: 'flex', alignItems: 'center', gap: 12, margin: 0, cursor: 'pointer' }}>
+                    <input 
+                      type="checkbox" 
+                      checked={settingsMaintenance} 
+                      onChange={e => setSettingsMaintenance(e.target.checked)} 
+                      style={{ width: 20, height: 20, accentColor: 'var(--orange)' }}
+                    />
+                    <span style={{ fontWeight: 600 }}>Ativar Modo Manutenção</span>
+                  </label>
                 </div>
                 
                 <div className="card" style={{ padding: 16 }}>
-                  <h4>📢 Avisos Globais</h4>
-                  <p style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8 }}>Escreva banners ou mensagens de aviso que aparecerão no topo da tela para todos os usuários logados (ex: Comunicados de feriados).</p>
-                </div>
-                
-                <div className="card" style={{ padding: 16 }}>
-                  <h4>🪙 Multiplicador de Pontos</h4>
-                  <p style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8 }}>Configure o valor global de conversão de pontos, por exemplo: Quantos pontos um aluno recebe a cada R$ 1,00 gasto.</p>
-                </div>
-                
-                <div className="card" style={{ padding: 16 }}>
-                  <h4>💾 Backup de Dados</h4>
-                  <p style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8 }}>Adicione botões para exportar todo o histórico de vendas, produtos e usuários, ou até para forçar o backup do banco de dados completo.</p>
+                  <h4>📢 Aviso Global da Universidade</h4>
+                  <p style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8, marginBottom: 16 }}>Escreva um banner de aviso que aparecerá no topo da tela para todos os usuários logados no site inteiro (ex: Feriado na faculdade).</p>
+                  <textarea 
+                    value={settingsWarning}
+                    onChange={e => setSettingsWarning(e.target.value)}
+                    placeholder="Ex: Não haverá aulas e as cantinas estarão fechadas neste feriado."
+                    rows={3}
+                    style={{ width: '100%', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 14, fontFamily: 'inherit' }}
+                  />
                 </div>
               </div>
+
+              <button className="btn-success" onClick={saveSettings}>Salvar Configurações Globais</button>
             </div>
           )}
         </>
@@ -2202,7 +2175,6 @@ export const isCanteenOpen = (canteen: Canteen) => {
 
 function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Screen) => void, canteens: Canteen[], setSelectedCanteen: (c: Canteen) => void }) {
 
-
   return (
     <div className="page">
       <div className="hero">
@@ -2212,18 +2184,24 @@ function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Scre
       <div className="cantinas-grid">
         {canteens.map(canteen => {
           const isOpen = isCanteenOpen(canteen);
+          const isMaintenance = canteen.maintenance_mode === 1;
           return (
             <div 
               key={canteen.id} 
               className="cantina-card" 
-              style={{ opacity: isOpen ? 1 : 0.6, cursor: isOpen ? 'pointer' : 'not-allowed' }}
+              style={{ opacity: isOpen || isMaintenance ? 1 : 0.6, cursor: isOpen || isMaintenance ? 'pointer' : 'not-allowed', position: 'relative' }}
               onClick={() => {
-                if (isOpen) {
+                if (isOpen || isMaintenance) {
                   setSelectedCanteen(canteen);
                   goTo('catalogo');
                 }
               }}
             >
+              {isMaintenance && (
+                <div style={{ position: 'absolute', top: 8, right: 8, background: '#f59e0b', color: '#fff', fontSize: 11, fontWeight: 'bold', padding: '4px 8px', borderRadius: 4, zIndex: 2 }}>
+                  MANUTENÇÃO
+                </div>
+              )}
               <LazyMedia className="cantina-img" style={{ background: canteen.color }} emoji={canteen.emoji} imageUrl={canteen.image_url} alt={canteen.name} />
               <div className="cantina-info">
                 <h3>{canteen.name}</h3>
@@ -2266,12 +2244,20 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
   const currentRewardPointsInCart = cart ? cart.reduce((sum, item) => sum + (item.isReward && item.points_price ? item.points_price * item.qty : 0), 0) : 0;
 
   const handleAddToCart = (p: Product) => {
+    if (selectedCanteen?.maintenance_mode === 1) {
+      showToast('⚠️ A cantina está em modo de manutenção e não está aceitando pedidos no momento.');
+      return;
+    }
     addToCart(p);
     setAddedProductId(p.id);
     setTimeout(() => setAddedProductId(null), 500);
   };
 
   const handleAddToCartWithPoints = (p: Product) => {
+    if (selectedCanteen?.maintenance_mode === 1) {
+      showToast('⚠️ A cantina está em modo de manutenção e não está aceitando pedidos no momento.');
+      return;
+    }
     if (!currentUser?.id) return;
     if (points - currentRewardPointsInCart < (p.points_price || 0)) {
       showToast('⚠️ Pontos insuficientes para adicionar mais este item!');
@@ -2286,6 +2272,16 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
 
   return (
     <div className="page">
+      {selectedCanteen?.global_warning && (
+        <div style={{ background: '#fef2f2', border: '1px solid #fca5a5', color: '#b91c1c', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>
+          ⚠️ <strong>Aviso da Cantina:</strong> {selectedCanteen.global_warning}
+        </div>
+      )}
+      {selectedCanteen?.maintenance_mode === 1 && (
+        <div style={{ background: '#fffbeb', border: '1px solid #fcd34d', color: '#b45309', padding: 12, borderRadius: 8, marginBottom: 16, fontSize: 14 }}>
+          ⛔ <strong>Modo Manutenção:</strong> Esta cantina não está aceitando novos pedidos temporariamente.
+        </div>
+      )}
       <div className="catalog-header">
         <div>
           <div className="tag tag-orange">{selectedCanteen?.name || 'Cantina Central'}</div>
@@ -2542,7 +2538,8 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
   );
 }
 
-function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, couponCodeState, setCouponCodeState, handleApplyCoupon, appliedCoupon, couponError, setCouponError }: { goBack: () => void, cart: CartItem[], changeQty: (i: number, d: number) => void, clearCart: () => void, finalizarPedido: () => void, couponCodeState: string, setCouponCodeState: (s: string) => void, handleApplyCoupon: (c: string) => void, appliedCoupon: any, couponError: string, setCouponError: (e: string) => void }) {
+function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, couponCodeState, setCouponCodeState, handleApplyCoupon, appliedCoupon, couponError, setCouponError, selectedCanteen }: { goBack: () => void, cart: CartItem[], changeQty: (i: number, d: number) => void, clearCart: () => void, finalizarPedido: () => void, couponCodeState: string, setCouponCodeState: (s: string) => void, handleApplyCoupon: (c: string) => void, appliedCoupon: any, couponError: string, setCouponError: (e: string) => void, selectedCanteen: Canteen | null }) {
+  const isMaintenanceMode = selectedCanteen?.maintenance_mode === 1;
   const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
   const totalPoints = cart.reduce((sum, item) => sum + (item.isReward && item.points_price ? item.points_price * item.qty : 0), 0);
   
@@ -2683,7 +2680,13 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, c
               </div>
             )}
             
-            <button className="btn-orange btn-full" style={{ marginTop: 20 }} onClick={finalizarPedido}>
+            {isMaintenanceMode && (
+              <div style={{ marginTop: 16, background: '#fffbeb', border: '1px solid #fcd34d', color: '#b45309', padding: 12, borderRadius: 8, fontSize: 13, textAlign: 'center' }}>
+                ⛔ <strong>A cantina está em manutenção.</strong><br/>Não é possível finalizar pedidos no momento.
+              </div>
+            )}
+            
+            <button className="btn-orange btn-full" style={{ marginTop: 20 }} onClick={finalizarPedido} disabled={isMaintenanceMode}>
               ✅ Finalizar Pedido
             </button>
           </div>
@@ -2869,11 +2872,11 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
   };
 
   const getStatusText = (status: string) => {
-    return new StatusPedidoContexto(status).comportamento_mostrarTexto();
+    return OrderStatusFactory.createStrategy(status).getText();
   };
 
   const getStatusColor = (status: string) => {
-    return new StatusPedidoContexto(status).comportamento_mostrarCor();
+    return OrderStatusFactory.createStrategy(status).getStyles();
   };
 
   return (
@@ -2968,11 +2971,336 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
   );
 }
 
+function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Canteen | null }) {
+  const [revenuePeriod, setRevenuePeriod] = useState<'dia' | 'semana' | 'mes'>('semana');
+  const [productPeriod, setProductPeriod] = useState<'dia' | 'semana' | 'mes'>('semana');
+  const [leastSoldPeriod, setLeastSoldPeriod] = useState<'dia' | 'semana' | 'mes'>('semana');
+  const [hourlyPeriod, setHourlyPeriod] = useState<'dia' | 'semana' | 'mes'>('semana');
+  const [weekdayPeriod, setWeekdayPeriod] = useState<'semana' | 'mes' | 'semestre' | 'ano'>('mes');
+  const [cardRevenuePeriod, setCardRevenuePeriod] = useState<'anual' | 'semestral'>('anual');
+
+  const activeOrders = orders.filter(o => o.status === 'retirado' || o.status === 'pronto');
+  const now = new Date();
+
+  const filterByPeriod = (orderDateStr: string, period: 'dia' | 'semana' | 'mes' | 'semestre' | 'ano') => {
+    const orderDate = new Date(orderDateStr.replace(' ', 'T') + 'Z');
+    const diffTime = now.getTime() - orderDate.getTime();
+    const diffDays = diffTime / (1000 * 60 * 60 * 24);
+    
+    if (period === 'dia') return diffDays <= 1;
+    if (period === 'semana') return diffDays <= 7;
+    if (period === 'mes') return diffDays <= 30;
+    if (period === 'semestre') return diffDays <= 180;
+    return diffDays <= 365;
+  };
+
+  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+  const todayOrders = activeOrders.filter(o => {
+    const orderDate = new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+    return orderDate === todayStr;
+  });
+  const todayRevenue = todayOrders.reduce((acc, o) => acc + o.total, 0);
+
+  const cardOrders = activeOrders.filter(o => filterByPeriod(o.created_at, cardRevenuePeriod === 'anual' ? 'ano' : 'semestre'));
+  const cardRevenue = cardOrders.reduce((acc, o) => acc + o.total, 0);
+
+  // Revenue Chart Data
+  const groupedRevenue: Record<string, number> = {};
+  const revenueOrders = activeOrders.filter(o => filterByPeriod(o.created_at, revenuePeriod));
+
+  revenueOrders.forEach(o => {
+    const day = new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+    groupedRevenue[day] = (groupedRevenue[day] || 0) + o.total;
+  });
+  
+  const lineChartData = Object.keys(groupedRevenue).sort().map(date => ({
+    date: date.substring(5).split('-').reverse().join('/'),
+    receita: Number(groupedRevenue[date].toFixed(2))
+  }));
+
+  // Products Chart Data
+  const productCountPeriod: Record<string, number> = {};
+  const productOrders = activeOrders.filter(o => filterByPeriod(o.created_at, productPeriod));
+  productOrders.forEach(o => {
+    try {
+      const items: CartItem[] = JSON.parse(o.items);
+      items.forEach(i => {
+        productCountPeriod[i.name] = (productCountPeriod[i.name] || 0) + i.qty;
+      });
+    } catch(e) {}
+  });
+
+  const barChartData = Object.entries(productCountPeriod)
+    .map(([name, qty]) => ({ name, quantidade: qty }))
+    .sort((a,b) => b.quantidade - a.quantidade)
+    .slice(0, 5);
+
+  // Least Sold Products Chart Data
+  const leastSoldProductCount: Record<string, number> = {};
+  const leastSoldOrders = activeOrders.filter(o => filterByPeriod(o.created_at, leastSoldPeriod));
+  leastSoldOrders.forEach(o => {
+    try {
+      const items: CartItem[] = JSON.parse(o.items);
+      items.forEach(i => {
+        leastSoldProductCount[i.name] = (leastSoldProductCount[i.name] || 0) + i.qty;
+      });
+    } catch(e) {}
+  });
+
+  const barChartDataBottom = Object.entries(leastSoldProductCount)
+    .map(([name, qty]) => ({ name, quantidade: qty }))
+    .sort((a,b) => a.quantidade - b.quantidade)
+    .slice(0, 5);
+
+  // Hourly Chart Data
+  const salesByHour = Array(24).fill(0);
+  const hourlyOrders = activeOrders.filter(o => filterByPeriod(o.created_at, hourlyPeriod));
+  hourlyOrders.forEach(o => {
+    // get hours in local time
+    const localDate = new Date(new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+    const hour = localDate.getHours();
+    salesByHour[hour]++;
+  });
+
+  let minHour = 24;
+  let maxHour = -1;
+  salesByHour.forEach((count, h) => {
+    if (count > 0) {
+      if (h < minHour) minHour = h;
+      if (h > maxHour) maxHour = h;
+    }
+  });
+  if (minHour > maxHour) { minHour = 8; maxHour = 18; }
+  else {
+    minHour = Math.max(0, minHour - 1);
+    maxHour = Math.min(23, maxHour + 1);
+  }
+
+  const hourlyChartData = [];
+  for (let i = minHour; i <= maxHour; i++) {
+    hourlyChartData.push({ hour: `${i}h`, pedidos: salesByHour[i] });
+  }
+
+  // Weekday Chart Data
+  const salesByWeekday = Array(7).fill(0);
+  const weekdayOrders = activeOrders.filter(o => filterByPeriod(o.created_at, weekdayPeriod));
+  weekdayOrders.forEach(o => {
+    const localDate = new Date(new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+    const day = localDate.getDay();
+    salesByWeekday[day] += o.total;
+  });
+  const daysOfWeek = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
+  const weekdayChartData = salesByWeekday.map((total, idx) => ({
+    name: daysOfWeek[idx],
+    receita: Number(total.toFixed(2))
+  }));
+
+  const statusCount = {
+    'Aguardando': orders.filter(o => o.status === 'aguardando').length,
+    'Em Preparo': orders.filter(o => o.status === 'preparo').length,
+    'Prontos/Retirados': orders.filter(o => o.status === 'pronto' || o.status === 'retirado').length,
+    'Cancelados': orders.filter(o => o.status === 'cancelado').length,
+  };
+
+  const pieData = [
+    { name: 'Aguardando', value: statusCount['Aguardando'] },
+    { name: 'Em Preparo', value: statusCount['Em Preparo'] },
+    { name: 'Prontos/Retirados', value: statusCount['Prontos/Retirados'] },
+    { name: 'Cancelados', value: statusCount['Cancelados'] }
+  ].filter(d => d.value > 0);
+
+  const statusColors: Record<string, string> = {
+    'Aguardando': '#3b82f6',
+    'Em Preparo': '#f59e0b',
+    'Prontos/Retirados': '#10b981',
+    'Cancelados': '#ef4444'
+  };
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 240px), 1fr))', gap: 16 }}>
+        <div className="card" style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ fontSize: 13, color: 'var(--muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Vendas Hoje</div>
+          <div style={{ fontSize: 32, fontWeight: 'bold', color: 'var(--orange)' }}>R$ {todayRevenue.toFixed(2)}</div>
+          <div style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8 }}>{todayOrders.length} pedidos hoje</div>
+        </div>
+        <div 
+          className="card" 
+          style={{ padding: 24, textAlign: 'center', cursor: 'pointer', transition: 'all 0.2s ease', userSelect: 'none' }} 
+          onClick={() => setCardRevenuePeriod(prev => prev === 'anual' ? 'semestral' : 'anual')}
+          title="Clique para alternar período"
+        >
+          <div style={{ fontSize: 13, color: 'var(--muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>
+            {cardRevenuePeriod === 'anual' ? 'Faturamento Anual' : 'Faturamento Semestral'}
+            <span style={{ fontSize: 10, opacity: 0.5, marginLeft: 6 }}>🔄</span>
+          </div>
+          <div style={{ fontSize: 32, fontWeight: 'bold', color: 'var(--success)' }}>R$ {cardRevenue.toFixed(2)}</div>
+          <div style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8 }}>{cardOrders.length} pedidos confirmados</div>
+        </div>
+        <div className="card" style={{ padding: 24, textAlign: 'center' }}>
+          <div style={{ fontSize: 13, color: 'var(--muted)', fontWeight: 600, textTransform: 'uppercase', letterSpacing: 1, marginBottom: 8 }}>Avaliação da Cantina</div>
+          <div style={{ fontSize: 32, fontWeight: 'bold', color: '#f59e0b' }}>⭐ {myCanteen?.avg_rating ? Number(myCanteen.avg_rating).toFixed(1) : 'N/A'}</div>
+          <div style={{ fontSize: 14, color: 'var(--muted)', marginTop: 8 }}>{myCanteen?.rating_count || 0} avaliações recebidas</div>
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 400px), 1fr))', gap: 24 }}>
+        <div className="card" style={{ padding: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+            <h4 style={{ fontWeight: 'bold', margin: 0 }}>Faturamento Geral</h4>
+            <select className="form-input" style={{ width: 'auto', padding: '4px 8px', fontSize: 13 }} value={revenuePeriod} onChange={(e) => setRevenuePeriod(e.target.value as any)}>
+              <option value="dia">Último dia</option>
+              <option value="semana">Últimos 7 dias</option>
+              <option value="mes">Últimos 30 dias</option>
+            </select>
+          </div>
+          {lineChartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <LineChart data={lineChartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                <XAxis dataKey="date" tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
+                <YAxis tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} tickFormatter={(val) => `R$ ${val}`} />
+                <RechartsTooltip contentStyle={{ background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--text)' }} formatter={(value: number) => [`R$ ${value}`, 'Faturamento']} cursor={{ fill: 'rgba(255,255,255,0.1)' }} />
+                <Line type="monotone" dataKey="receita" stroke="var(--orange)" strokeWidth={3} dot={{r: 4, strokeWidth: 2}} activeDot={{r: 6}} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+             <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>Ops! Nenhum faturamento no período</div>
+          )}
+        </div>
+
+        <div className="card" style={{ padding: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+            <h4 style={{ fontWeight: 'bold', margin: 0 }}>Top 5 Produtos Mais Vendidos</h4>
+            <select className="form-input" style={{ width: 'auto', padding: '4px 8px', fontSize: 13 }} value={productPeriod} onChange={(e) => setProductPeriod(e.target.value as any)}>
+              <option value="dia">Último dia</option>
+              <option value="semana">Últimos 7 dias</option>
+              <option value="mes">Últimos 30 dias</option>
+            </select>
+          </div>
+          {barChartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={barChartData} layout="vertical" margin={{ left: 40, right: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e5e7eb" />
+                <XAxis type="number" tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
+                <YAxis type="category" dataKey="name" width={100} tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
+                <RechartsTooltip contentStyle={{ background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--text)' }} formatter={(value: number) => [`${value} unidades`, 'Vendas']} cursor={{ fill: 'rgba(255,255,255,0.1)' }} />
+                <Bar dataKey="quantidade" fill="var(--primary)" radius={[0, 4, 4, 0]} barSize={24} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>Sem vendas no período selecionado</div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 400px), 1fr))', gap: 24 }}>
+        <div className="card" style={{ padding: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+            <h4 style={{ fontWeight: 'bold', margin: 0 }}>Distribuição de Horários</h4>
+            <select className="form-input" style={{ width: 'auto', padding: '4px 8px', fontSize: 13 }} value={hourlyPeriod} onChange={(e) => setHourlyPeriod(e.target.value as any)}>
+              <option value="dia">Último dia</option>
+              <option value="semana">Últimos 7 dias</option>
+              <option value="mes">Últimos 30 dias</option>
+            </select>
+          </div>
+          {hourlyChartData.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={hourlyChartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                <XAxis dataKey="hour" tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
+                <YAxis tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
+                <RechartsTooltip contentStyle={{ background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--text)' }} formatter={(value: number) => [`${value} pedidos`, 'Volume']} cursor={{ fill: 'rgba(255,255,255,0.1)' }} />
+                <Bar dataKey="pedidos" fill="var(--orange)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+             <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>Ops! Nenhum pedido no período</div>
+          )}
+        </div>
+
+        <div className="card" style={{ padding: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+            <h4 style={{ fontWeight: 'bold', margin: 0 }}>Top 5 Produtos Menos Vendidos</h4>
+            <select className="form-input" style={{ width: 'auto', padding: '4px 8px', fontSize: 13 }} value={leastSoldPeriod} onChange={(e) => setLeastSoldPeriod(e.target.value as any)}>
+              <option value="dia">Último dia</option>
+              <option value="semana">Últimos 7 dias</option>
+              <option value="mes">Últimos 30 dias</option>
+            </select>
+          </div>
+          {barChartDataBottom.length > 0 ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={barChartDataBottom} layout="vertical" margin={{ left: 40, right: 20 }}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e5e7eb" />
+                <XAxis type="number" tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
+                <YAxis type="category" dataKey="name" width={100} tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
+                <RechartsTooltip contentStyle={{ background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--text)' }} formatter={(value: number) => [`${value} unidades`, 'Vendas']} cursor={{ fill: 'rgba(255,255,255,0.1)' }} />
+                <Bar dataKey="quantidade" fill="#ef4444" radius={[0, 4, 4, 0]} barSize={24} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>Sem vendas no período selecionado</div>
+          )}
+        </div>
+      </div>
+
+      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 400px), 1fr))', gap: 24 }}>
+        <div className="card" style={{ padding: 24 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 24, flexWrap: 'wrap', gap: 12 }}>
+            <h4 style={{ fontWeight: 'bold', margin: 0 }}>Faturamento por Dia da Semana</h4>
+            <select className="form-input" style={{ width: 'auto', padding: '4px 8px', fontSize: 13 }} value={weekdayPeriod} onChange={(e) => setWeekdayPeriod(e.target.value as any)}>
+              <option value="semana">Últimos 7 dias</option>
+              <option value="mes">Últimos 30 dias</option>
+              <option value="semestre">Últimos 6 meses</option>
+              <option value="ano">Último ano</option>
+            </select>
+          </div>
+          {weekdayChartData.some(d => d.receita > 0) ? (
+            <ResponsiveContainer width="100%" height={250}>
+              <BarChart data={weekdayChartData}>
+                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
+                <XAxis dataKey="name" tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
+                <YAxis tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} tickFormatter={(val) => `R$ ${val}`} />
+                <RechartsTooltip contentStyle={{ background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--text)' }} formatter={(value: number) => [`R$ ${value}`, 'Faturamento']} cursor={{ fill: 'rgba(255,255,255,0.1)' }} />
+                <Bar dataKey="receita" fill="var(--success)" radius={[4, 4, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          ) : (
+            <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>Sem vendas no período selecionado</div>
+          )}
+        </div>
+
+        <div className="card" style={{ padding: 24 }}>
+          <h4 style={{ marginBottom: 16, fontWeight: 'bold', textAlign: 'center' }}>Pedidos por Status</h4>
+          <ResponsiveContainer width="100%" height={200}>
+            <PieChart>
+              <Pie data={pieData} dataKey="value" nameKey="name" cx="50%" cy="50%" innerRadius={50} outerRadius={80} paddingAngle={5}>
+                {pieData.map((entry, index) => (
+                  <Cell key={`cell-${index}`} fill={statusColors[entry.name]} />
+                ))}
+              </Pie>
+              <RechartsTooltip contentStyle={{ background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--text)' }} formatter={(value: number) => [`${value} pedidos`, 'Quantidade']} />
+            </PieChart>
+          </ResponsiveContainer>
+          <div style={{ display: 'flex', justifyContent: 'center', gap: 16, marginTop: 16, flexWrap: 'wrap' }}>
+            {pieData.map((entry, idx) => (
+               <div key={entry.name} style={{ display: 'flex', alignItems: 'center', gap: 6, fontSize: 13, color: 'var(--muted)' }}>
+                 <div style={{ width: 12, height: 12, borderRadius: '50%', background: statusColors[entry.name] }} />
+                 {entry.name} ({entry.value})
+               </div>
+            ))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, canteens, fetchCanteens, categories, fetchCategories, fetchTags }: { products: Product[], tags: Tag[], currentUser: User | null, fetchProducts: () => void, showToast: (msg: string) => void, canteens: Canteen[], fetchCanteens: () => void, categories: Category[], fetchCategories: () => void, fetchTags: () => void }) {
-  const [activeTab, setActiveTab] = useState<'pedidos' | 'gerenciar_produtos' | 'config' | 'cupons'>('pedidos');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'pedidos' | 'gerenciar_produtos' | 'config' | 'cupons'>('dashboard');
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderFilter, setOrderFilter] = useState<string>('todos');
-  const [orderDateFilter, setOrderDateFilter] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [orderDateFilter, setOrderDateFilter] = useState<string>(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }));
   const [orderSortMethod, setOrderSortMethod] = useState<'desc' | 'asc'>('desc');
   const [orderSearchQuery, setOrderSearchQuery] = useState<string>('');
   const [productSearchQuery, setProductSearchQuery] = useState<string>('');
@@ -2992,6 +3320,8 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   const [openTime, setOpenTime] = useState(myCanteen?.open_time || '08:00');
   const [closeTime, setCloseTime] = useState(myCanteen?.close_time || '18:00');
   const [pointsEnabled, setPointsEnabled] = useState(myCanteen?.points_enabled !== undefined ? myCanteen.points_enabled === 1 : true);
+  const [maintenanceMode, setMaintenanceMode] = useState(myCanteen?.maintenance_mode !== undefined ? myCanteen.maintenance_mode === 1 : false);
+  const [globalWarning, setGlobalWarning] = useState(myCanteen?.global_warning || '');
   const [showEmojiPicker, setShowEmojiPicker] = useState(false);
 
   useEffect(() => {
@@ -3004,6 +3334,8 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
       setOpenTime(myCanteen.open_time);
       setCloseTime(myCanteen.close_time);
       setPointsEnabled(myCanteen.points_enabled !== undefined ? myCanteen.points_enabled === 1 : true);
+      setMaintenanceMode(myCanteen.maintenance_mode !== undefined ? myCanteen.maintenance_mode === 1 : false);
+      setGlobalWarning(myCanteen.global_warning || '');
     }
   }, [myCanteen]);
 
@@ -3024,7 +3356,9 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
           color: canteenColor,
           open_time: openTime, 
           close_time: closeTime,
-          points_enabled: pointsEnabled ? 1 : 0
+          points_enabled: pointsEnabled ? 1 : 0,
+          maintenance_mode: maintenanceMode ? 1 : 0,
+          global_warning: globalWarning
         })
       });
       showToast('✅ Configurações atualizadas!');
@@ -3360,7 +3694,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   };
 
   useEffect(() => {
-    if (activeTab === 'pedidos') {
+    if (activeTab === 'pedidos' || activeTab === 'dashboard') {
       fetchOrders();
       const interval = setInterval(fetchOrders, 5000);
       return () => clearInterval(interval);
@@ -3376,23 +3710,21 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
       </div>
 
       <div className="gestor-tabs">
+        <button className={`gestor-tab ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>📈 Dashboard</button>
         <button className={`gestor-tab ${activeTab === 'pedidos' ? 'active' : ''}`} onClick={() => setActiveTab('pedidos')}>📋 Pedidos</button>
         <button className={`gestor-tab ${activeTab === 'gerenciar_produtos' ? 'active' : ''}`} onClick={() => { setActiveTab('gerenciar_produtos'); setIsProductFormVisible(false); }}>🥘 Gerenciar Produtos</button>
         <button className={`gestor-tab ${activeTab === 'cupons' ? 'active' : ''}`} onClick={() => setActiveTab('cupons')}>🎟️ Cupons</button>
         <button className={`gestor-tab ${activeTab === 'config' ? 'active' : ''}`} onClick={() => setActiveTab('config')}>⚙️ Configurações</button>
       </div>
 
+      {activeTab === 'dashboard' && (
+        <DashboardView orders={orders} myCanteen={myCanteen} />
+      )}
+
       {activeTab === 'config' && (
         <div className="gestor-panel active">
           <div className="card">
             <h3 style={{ marginBottom: 16 }}>Configurações da Cantina</h3>
-            
-            {myCanteen && (
-              <div style={{ marginBottom: 20, padding: 12, background: 'var(--bg-secondary)', borderRadius: 8 }}>
-                <strong>Avaliação Atual: </strong>
-                <span style={{ color: '#f59e0b' }}>★</span> {Number(myCanteen.avg_rating).toFixed(1)} ({myCanteen.rating_count} avaliações)
-              </div>
-            )}
 
             <div className="form">
               <label>Nome da Cantina
@@ -3443,6 +3775,31 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                 </label>
               </div>
 
+              <div style={{ marginTop: 12, padding: 16, background: 'var(--bg-secondary)', borderRadius: 12, border: '1px solid var(--line)' }}>
+                <label style={{ display: 'flex', alignItems: 'center', gap: 12, margin: 0, cursor: 'pointer' }}>
+                  <input 
+                    type="checkbox" 
+                    checked={maintenanceMode} 
+                    onChange={e => setMaintenanceMode(e.target.checked)} 
+                    style={{ width: 20, height: 20, accentColor: 'var(--orange)' }}
+                  />
+                  <div>
+                    <div style={{ fontWeight: 600 }}>Modo Manutenção</div>
+                    <div style={{ fontSize: 13, color: 'var(--muted)', fontWeight: 'normal', marginTop: 2 }}>Bloqueia a compra de itens nesta cantina temporariamente.</div>
+                  </div>
+                </label>
+              </div>
+
+              <label style={{ marginTop: 12 }}>Aviso Global
+                <textarea 
+                  value={globalWarning} 
+                  onChange={e => setGlobalWarning(e.target.value)} 
+                  placeholder="Ex: Faltou energia, não estamos servindo lanches quentes."
+                  rows={2}
+                  style={{ width: '100%', padding: '12px 14px', borderRadius: 8, border: '1px solid var(--line)', background: 'var(--surface)', fontSize: 14, fontFamily: 'inherit' }}
+                />
+              </label>
+
               <button className="btn-orange" style={{ marginTop: 12 }} onClick={handleSaveSettings}>Salvar Configurações</button>
             </div>
           </div>
@@ -3459,7 +3816,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
           {isAddingCoupon && (
             <div className="card" style={{ marginBottom: 20 }}>
               <h4 style={{ marginBottom: 12 }}>{editingCouponId ? 'Editar Cupom' : 'Criar Cupom'}</h4>
-              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: 12, marginBottom: 16 }}>
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 12, marginBottom: 16 }}>
                 <div>
                   <label style={{ display: 'block', fontSize: 13, marginBottom: 4, fontWeight: 500 }}>Código <span style={{ color: 'red' }}>*</span></label>
                   <input type="text" value={formCouponCode} onChange={e => setFormCouponCode(e.target.value.toUpperCase())} placeholder="EX: VERAO20" className="w-full" style={{ padding: '8px 12px', border: '1px solid var(--line)', background: 'var(--bg)', color: 'var(--text)', borderRadius: 8 }} />
@@ -3620,11 +3977,26 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                         <div className="order-meta">{order.user_name} · {itemsText} · R$ {order.total.toFixed(2).replace('.', ',')}</div>
                       </div>
                       <div style={{ display: 'flex', alignItems: 'center', gap: 12, flexWrap: 'wrap' }}>
-                        {new StatusPedidoContexto(order.status).comportamento_renderGestorActions(order.id, {
-                          updateOrderStatus,
-                          setDeleteOrderConfirmId,
-                          promptCancelReason: (id) => setOrderToCancelId(id)
-                        })}
+                        {(() => {
+                          const actionConfig = OrderStatusFactory.createStrategy(order.status).getActions(order.id, {
+                            updateOrderStatus,
+                            setDeleteOrderConfirmId,
+                            promptCancelReason: (id) => setOrderToCancelId(id)
+                          });
+                          if (!actionConfig) return null;
+                          return (
+                            <React.Fragment>
+                              <span className={actionConfig.tag.className || "tag"} style={actionConfig.tag.style}>{actionConfig.tag.text}</span>
+                              {actionConfig.buttons && actionConfig.buttons.length > 0 && (
+                                <div className="order-actions">
+                                  {actionConfig.buttons.map((btn: any, idx: number) => (
+                                    <button key={idx} className={btn.className} onClick={btn.action}>{btn.label}</button>
+                                  ))}
+                                </div>
+                              )}
+                            </React.Fragment>
+                          );
+                        })()}
                       </div>
                     </div>
                   );
