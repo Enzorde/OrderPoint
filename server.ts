@@ -319,6 +319,7 @@ class DatabaseManager {
     try { this.db.exec("ALTER TABLE products ADD COLUMN points_price INTEGER DEFAULT NULL"); } catch (e) {}
     try { this.db.exec("ALTER TABLE products ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
     try { this.db.exec("ALTER TABLE products ADD COLUMN tags TEXT DEFAULT '[]'"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE products ADD COLUMN image_url TEXT"); } catch (e) {}
 
     // Tags
     this.db.exec(`
@@ -330,11 +331,44 @@ class DatabaseManager {
       )
     `);
 
+    // Migrate orders to remove UNIQUE constraint if needed
+    try {
+      const dbSchema = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='orders'").get() as any;
+      if (dbSchema && dbSchema.sql.includes('UNIQUE')) {
+        // Ensure all possible columns exist first, so we don't fail the insert
+        try { this.db.exec(`ALTER TABLE orders ADD COLUMN user_id INTEGER`); } catch (e) {}
+        try { this.db.exec("ALTER TABLE orders ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
+        try { this.db.exec("ALTER TABLE orders ADD COLUMN points_awarded INTEGER DEFAULT 0"); } catch (e) {}
+        try { this.db.exec("ALTER TABLE orders ADD COLUMN cancel_reason TEXT"); } catch (e) {}
+        
+        this.db.exec(`
+          CREATE TABLE orders_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            code TEXT NOT NULL,
+            user_name TEXT NOT NULL,
+            user_id INTEGER,
+            items TEXT NOT NULL,
+            total REAL NOT NULL,
+            status TEXT NOT NULL DEFAULT 'aguardando',
+            canteen_id INTEGER DEFAULT 1,
+            points_awarded INTEGER DEFAULT 0,
+            cancel_reason TEXT,
+            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+          );
+          INSERT INTO orders_new SELECT id, code, user_name, user_id, items, total, status, canteen_id, points_awarded, cancel_reason, created_at FROM orders;
+          DROP TABLE orders;
+          ALTER TABLE orders_new RENAME TO orders;
+        `);
+      }
+    } catch (e) {
+      console.error("Migration error orders UNIQUE: ", e);
+    }
+
     // Orders
     this.db.exec(`
       CREATE TABLE IF NOT EXISTS orders (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT UNIQUE NOT NULL,
+        code TEXT NOT NULL,
         user_name TEXT NOT NULL,
         user_id INTEGER,
         items TEXT NOT NULL,
@@ -342,6 +376,7 @@ class DatabaseManager {
         status TEXT NOT NULL DEFAULT 'aguardando',
         canteen_id INTEGER DEFAULT 1,
         points_awarded INTEGER DEFAULT 0,
+        cancel_reason TEXT,
         created_at DATETIME DEFAULT CURRENT_TIMESTAMP
       )
     `);
@@ -371,6 +406,7 @@ class DatabaseManager {
       )
     `);
     try { this.db.exec("ALTER TABLE canteens ADD COLUMN location TEXT NOT NULL DEFAULT ''"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE canteens ADD COLUMN image_url TEXT"); } catch (e) {}
     try { this.db.exec("ALTER TABLE canteens ADD COLUMN points_enabled INTEGER DEFAULT 1"); } catch (e) {}
     try { this.db.exec("ALTER TABLE canteens ADD COLUMN maintenance_mode INTEGER DEFAULT 0"); } catch (e) {}
     try { this.db.exec("ALTER TABLE canteens ADD COLUMN global_warning TEXT DEFAULT ''"); } catch (e) {}
@@ -926,7 +962,7 @@ class ProductController extends BaseController {
 
   private getProdutoById(req: Request, res: Response) {
     try {
-      const product = this.db.prepare('SELECT emoji as foto, name as nome, desc as ingredientes, price as preco FROM products WHERE id = ?').get(req.params.id);
+      const product = this.db.prepare('SELECT emoji as foto, image_url as image_url, name as nome, desc as ingredientes, price as preco FROM products WHERE id = ?').get(req.params.id);
       if (product) {
         res.json(product);
       } else {
@@ -948,11 +984,11 @@ class ProductController extends BaseController {
 
   private create(req: Request, res: Response) {
     if (!checkGestor(req, res, this.db)) return;
-    const { name, desc, price, emoji, cat, stock, points_price, canteen_id, tags } = req.body;
+    const { name, desc, price, emoji, cat, stock, points_price, canteen_id, tags, image_url } = req.body;
     if (!name || !price || !cat) return res.status(400).json({ error: "Dados incompletos." });
     try {
-      const insert = this.db.prepare('INSERT INTO products (name, desc, price, emoji, cat, stock, points_price, canteen_id, tags) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)');
-      const result = insert.run(name, desc || '', price, emoji || '🍽️', cat, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1, tags || '[]');
+      const insert = this.db.prepare('INSERT INTO products (name, desc, price, emoji, cat, stock, points_price, canteen_id, tags, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const result = insert.run(name, desc || '', price, emoji || '🍽️', cat, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1, tags || '[]', image_url || null);
       res.status(201).json({ success: true, id: result.lastInsertRowid });
     } catch (error) {
       res.status(500).json({ error: "Erro ao criar produto." });
@@ -961,10 +997,10 @@ class ProductController extends BaseController {
 
   private update(req: Request, res: Response) {
     if (!checkGestor(req, res, this.db)) return;
-    const { name, desc, price, emoji, cat, active, stock, points_price, canteen_id, tags } = req.body;
+    const { name, desc, price, emoji, cat, active, stock, points_price, canteen_id, tags, image_url } = req.body;
     try {
-      const update = this.db.prepare('UPDATE products SET name=?, desc=?, price=?, emoji=?, cat=?, active=?, stock=?, points_price=?, canteen_id=?, tags=? WHERE id=?');
-      update.run(name, desc, price, emoji, cat, active !== undefined ? active : 1, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1, tags || '[]', req.params.id);
+      const update = this.db.prepare('UPDATE products SET name=?, desc=?, price=?, emoji=?, cat=?, active=?, stock=?, points_price=?, canteen_id=?, tags=?, image_url=? WHERE id=?');
+      update.run(name, desc, price, emoji, cat, active !== undefined ? active : 1, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1, tags || '[]', image_url || null, req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Erro ao atualizar produto." });
@@ -1063,10 +1099,10 @@ class CanteenController extends BaseController {
 
   private update(req: Request, res: Response) {
     if (!checkGestor(req, res, this.db) && !checkSuperAdmin(req, res, this.db)) return;
-    const { name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning } = req.body;
+    const { name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning, image_url } = req.body;
     try {
-      const update = this.db.prepare('UPDATE canteens SET name=?, desc=?, location=?, emoji=?, color=?, open_time=?, close_time=?, points_enabled=?, maintenance_mode=?, global_warning=? WHERE id=?');
-      update.run(name, desc, location, emoji, color, open_time, close_time, points_enabled !== undefined ? points_enabled : 1, maintenance_mode !== undefined ? maintenance_mode : 0, global_warning || '', req.params.id);
+      const update = this.db.prepare('UPDATE canteens SET name=?, desc=?, location=?, emoji=?, color=?, open_time=?, close_time=?, points_enabled=?, maintenance_mode=?, global_warning=?, image_url=? WHERE id=?');
+      update.run(name, desc, location, emoji, color, open_time, close_time, points_enabled !== undefined ? points_enabled : 1, maintenance_mode !== undefined ? maintenance_mode : 0, global_warning || '', image_url || null, req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Erro ao atualizar cantina." });
@@ -1075,11 +1111,11 @@ class CanteenController extends BaseController {
 
   private create(req: Request, res: Response) {
     if (!checkSuperAdmin(req, res, this.db)) return;
-    const { name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning } = req.body;
+    const { name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning, image_url } = req.body;
     if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
     try {
-      const insert = this.db.prepare('INSERT INTO canteens (name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-      const result = insert.run(name, desc || '', location || '', emoji || '🍽️', color || '#ffffff', open_time || '08:00', close_time || '18:00', points_enabled !== undefined ? points_enabled : 1, maintenance_mode !== undefined ? maintenance_mode : 0, global_warning || '');
+      const insert = this.db.prepare('INSERT INTO canteens (name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const result = insert.run(name, desc || '', location || '', emoji || '🍽️', color || '#ffffff', open_time || '08:00', close_time || '18:00', points_enabled !== undefined ? points_enabled : 1, maintenance_mode !== undefined ? maintenance_mode : 0, global_warning || '', image_url || null);
       res.status(201).json({ success: true, canteenId: result.lastInsertRowid });
     } catch (error) {
       res.status(500).json({ error: "Erro ao criar cantina." });
@@ -1447,7 +1483,24 @@ class OrderController extends BaseController {
     let attempts = 0;
 
     while (!inserted && attempts < 10) {
-      code = Math.floor(10000000 + Math.random() * 90000000).toString();
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      code = '';
+      for (let i = 0; i < 4; i++) {
+        code += chars.charAt(Math.floor(Math.random() * chars.length));
+      }
+      
+      const recentOrder = this.db.prepare(`
+        SELECT id FROM orders 
+        WHERE code = ? AND (
+          status IN ('aguardando', 'preparo', 'pronto') OR 
+          created_at >= datetime('now', '-1 day')
+        )
+      `).get(code);
+
+      if (recentOrder) {
+        attempts++;
+        continue;
+      }
       
       try {
         this.db.exec('BEGIN TRANSACTION');
@@ -1679,7 +1732,8 @@ class AppServer {
 
   constructor() {
     this.app = express();
-    this.app.use(express.json());
+    this.app.use(express.json({ limit: '50mb' }));
+    this.app.use(express.urlencoded({ limit: '50mb', extended: true }));
     this.app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
     this.dbManager = new DatabaseManager();
     this.setupControllers();
