@@ -140,152 +140,13 @@ const hashPassword = (password: string) => {
 // ============================================================================
 // Database Manager
 // ============================================================================
-class DatabaseManager {
-  public db: DatabaseSync;
-
-  constructor() {
-    this.db = new DatabaseSync('./database.sqlite');
-    this.initializeSchema();
-    this.seedData();
+class DatabaseSeeder {
+  private db: DatabaseSync;
+  constructor(db: DatabaseSync) {
+    this.db = db;
   }
 
-  private initializeSchema() {
-    // Users
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        matricula TEXT,
-        senha TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'student',
-        points INTEGER DEFAULT 0,
-        canteen_id INTEGER DEFAULT NULL
-      )
-    `);
-    try { this.db.exec("ALTER TABLE users ADD COLUMN points INTEGER DEFAULT 0"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE users ADD COLUMN canteen_id INTEGER DEFAULT NULL"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE users ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP"); } catch (e) {}
-
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS verification_codes (
-        email TEXT PRIMARY KEY,
-        code TEXT NOT NULL,
-        expires_at INTEGER NOT NULL
-      )
-    `);
-
-    // Products
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS products (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        desc TEXT NOT NULL,
-        price REAL NOT NULL,
-        emoji TEXT NOT NULL,
-        cat TEXT NOT NULL,
-        active INTEGER DEFAULT 1,
-        stock INTEGER DEFAULT 10,
-        points_price INTEGER DEFAULT NULL,
-        canteen_id INTEGER DEFAULT 1
-      )
-    `);
-    try { this.db.exec("ALTER TABLE products ADD COLUMN stock INTEGER DEFAULT 10"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE products ADD COLUMN points_price INTEGER DEFAULT NULL"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE products ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE products ADD COLUMN tags TEXT DEFAULT '[]'"); } catch (e) {}
-
-    // Tags
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS tags (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        color TEXT NOT NULL,
-        canteen_id INTEGER NOT NULL
-      )
-    `);
-
-    // Orders
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS orders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT UNIQUE NOT NULL,
-        user_name TEXT NOT NULL,
-        user_id INTEGER,
-        items TEXT NOT NULL,
-        total REAL NOT NULL,
-        status TEXT NOT NULL DEFAULT 'aguardando',
-        canteen_id INTEGER DEFAULT 1,
-        points_awarded INTEGER DEFAULT 0,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Add user_id column if it doesn't exist
-    try {
-      this.db.exec(`ALTER TABLE orders ADD COLUMN user_id INTEGER`);
-    } catch (e) {
-      // Column might already exist
-    }
-    try { this.db.exec("ALTER TABLE orders ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE orders ADD COLUMN points_awarded INTEGER DEFAULT 0"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE orders ADD COLUMN cancel_reason TEXT"); } catch (e) {}
-
-    // Canteens
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS canteens (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        desc TEXT NOT NULL,
-        location TEXT NOT NULL DEFAULT '',
-        emoji TEXT NOT NULL,
-        color TEXT NOT NULL,
-        open_time TEXT NOT NULL DEFAULT '08:00',
-        close_time TEXT NOT NULL DEFAULT '18:00',
-        points_enabled INTEGER DEFAULT 1
-      )
-    `);
-    try { this.db.exec("ALTER TABLE canteens ADD COLUMN location TEXT NOT NULL DEFAULT ''"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE canteens ADD COLUMN points_enabled INTEGER DEFAULT 1"); } catch (e) {}
-
-    // Ratings
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS ratings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        order_id INTEGER UNIQUE NOT NULL,
-        canteen_id INTEGER NOT NULL DEFAULT 1,
-        score INTEGER NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    try { this.db.exec("ALTER TABLE ratings ADD COLUMN canteen_id INTEGER NOT NULL DEFAULT 1"); } catch (e) {}
-
-    // Categories
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS categories (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT UNIQUE NOT NULL
-      )
-    `);
-
-    // Coupons
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS coupons (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT UNIQUE NOT NULL,
-        discount_pct REAL NOT NULL,
-        max_uses INTEGER DEFAULT NULL,
-        used_count INTEGER DEFAULT 0,
-        expires_at DATETIME DEFAULT NULL,
-        min_value REAL DEFAULT 0,
-        canteen_id INTEGER NOT NULL,
-        active INTEGER DEFAULT 1
-      )
-    `);
-    try { this.db.exec("ALTER TABLE coupons ADD COLUMN min_value REAL DEFAULT 0"); } catch (e) {}
-  }
-
-  private seedData() {
+  public seedData() {
     // Seed Mock User
     const userCount = this.db.prepare('SELECT COUNT(*) as count FROM users WHERE email = ?').get('admin@facens.br') as any;
     if (userCount.count === 0) {
@@ -392,6 +253,172 @@ class DatabaseManager {
       this.db.exec("UPDATE products SET tags = '[7]' WHERE name = 'Pão de Queijo' AND canteen_id = 3");
       this.db.exec("UPDATE products SET tags = '[6]' WHERE name = 'Cookie' AND canteen_id = 3");
     }
+
+    // Seed Settings
+    const settingsCount = this.db.prepare('SELECT COUNT(*) as count FROM settings').get() as any;
+    if (settingsCount.count === 0) {
+      const insertSetting = this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
+      insertSetting.run('global_maintenance', '0');
+      insertSetting.run('global_warning', '');
+    }
+  }
+}
+
+class DatabaseManager {
+  public db: DatabaseSync;
+
+  constructor() {
+    this.db = new DatabaseSync('./database.sqlite');
+    this.initializeSchema();
+    const seeder = new DatabaseSeeder(this.db);
+    seeder.seedData();
+  }
+
+  private initializeSchema() {
+    // Users
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS users (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        email TEXT UNIQUE NOT NULL,
+        matricula TEXT,
+        senha TEXT NOT NULL,
+        role TEXT NOT NULL DEFAULT 'student',
+        points INTEGER DEFAULT 0,
+        canteen_id INTEGER DEFAULT NULL
+      )
+    `);
+    try { this.db.exec("ALTER TABLE users ADD COLUMN points INTEGER DEFAULT 0"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN canteen_id INTEGER DEFAULT NULL"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE users ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP"); } catch (e) {}
+
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS verification_codes (
+        email TEXT PRIMARY KEY,
+        code TEXT NOT NULL,
+        expires_at INTEGER NOT NULL
+      )
+    `);
+
+    // Products
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS products (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        desc TEXT NOT NULL,
+        price REAL NOT NULL,
+        emoji TEXT NOT NULL,
+        cat TEXT NOT NULL,
+        active INTEGER DEFAULT 1,
+        stock INTEGER DEFAULT 10,
+        points_price INTEGER DEFAULT NULL,
+        canteen_id INTEGER DEFAULT 1
+      )
+    `);
+    try { this.db.exec("ALTER TABLE products ADD COLUMN stock INTEGER DEFAULT 10"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE products ADD COLUMN points_price INTEGER DEFAULT NULL"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE products ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE products ADD COLUMN tags TEXT DEFAULT '[]'"); } catch (e) {}
+
+    // Tags
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS tags (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        color TEXT NOT NULL,
+        canteen_id INTEGER NOT NULL
+      )
+    `);
+
+    // Orders
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS orders (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE NOT NULL,
+        user_name TEXT NOT NULL,
+        user_id INTEGER,
+        items TEXT NOT NULL,
+        total REAL NOT NULL,
+        status TEXT NOT NULL DEFAULT 'aguardando',
+        canteen_id INTEGER DEFAULT 1,
+        points_awarded INTEGER DEFAULT 0,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+
+    // Add user_id column if it doesn't exist
+    try {
+      this.db.exec(`ALTER TABLE orders ADD COLUMN user_id INTEGER`);
+    } catch (e) {
+      // Column might already exist
+    }
+    try { this.db.exec("ALTER TABLE orders ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE orders ADD COLUMN points_awarded INTEGER DEFAULT 0"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE orders ADD COLUMN cancel_reason TEXT"); } catch (e) {}
+
+    // Canteens
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS canteens (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        desc TEXT NOT NULL,
+        location TEXT NOT NULL DEFAULT '',
+        emoji TEXT NOT NULL,
+        color TEXT NOT NULL,
+        open_time TEXT NOT NULL DEFAULT '08:00',
+        close_time TEXT NOT NULL DEFAULT '18:00',
+        points_enabled INTEGER DEFAULT 1
+      )
+    `);
+    try { this.db.exec("ALTER TABLE canteens ADD COLUMN location TEXT NOT NULL DEFAULT ''"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE canteens ADD COLUMN points_enabled INTEGER DEFAULT 1"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE canteens ADD COLUMN maintenance_mode INTEGER DEFAULT 0"); } catch (e) {}
+    try { this.db.exec("ALTER TABLE canteens ADD COLUMN global_warning TEXT DEFAULT ''"); } catch (e) {}
+
+    // Ratings
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS ratings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        order_id INTEGER UNIQUE NOT NULL,
+        canteen_id INTEGER NOT NULL DEFAULT 1,
+        score INTEGER NOT NULL,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    try { this.db.exec("ALTER TABLE ratings ADD COLUMN canteen_id INTEGER NOT NULL DEFAULT 1"); } catch (e) {}
+
+    // Categories
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS categories (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT UNIQUE NOT NULL
+      )
+    `);
+
+    // Coupons
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS coupons (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        code TEXT UNIQUE NOT NULL,
+        discount_pct REAL NOT NULL,
+        max_uses INTEGER DEFAULT NULL,
+        used_count INTEGER DEFAULT 0,
+        expires_at DATETIME DEFAULT NULL,
+        min_value REAL DEFAULT 0,
+        canteen_id INTEGER NOT NULL,
+        active INTEGER DEFAULT 1
+      )
+    `);
+    try { this.db.exec("ALTER TABLE coupons ADD COLUMN min_value REAL DEFAULT 0"); } catch (e) {}
+
+    // Settings
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS settings (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        key TEXT UNIQUE NOT NULL,
+        value TEXT NOT NULL
+      )
+    `);
   }
 }
 
@@ -682,6 +709,13 @@ class UserController extends BaseController {
       const user = select.get(email, hashedSenha) as any;
       
       if (user) {
+        if (user.role !== 'superadmin') {
+           const maintenanceSetting = this.db.prepare("SELECT value FROM settings WHERE key = 'global_maintenance'").get() as any;
+           if (maintenanceSetting && maintenanceSetting.value === '1') {
+             return res.status(403).json({ error: "O sistema de cantinas está em modo de manutenção e encontra-se indisponível no momento." });
+           }
+        }
+
         res.json({
           success: true,
           user: {
@@ -949,6 +983,46 @@ class ProductController extends BaseController {
   }
 }
 
+class SettingsController extends BaseController {
+  public registerRoutes() {
+    this.app.get("/api/settings", this.getAll.bind(this));
+    this.app.put("/api/settings", this.update.bind(this));
+  }
+
+  private getAll(req: Request, res: Response) {
+    try {
+      const rows = this.db.prepare('SELECT key, value FROM settings').all() as {key: string, value: string}[];
+      const settingsMap: Record<string, string> = {};
+      for (const row of rows) {
+        settingsMap[row.key] = row.value;
+      }
+      res.json(settingsMap);
+    } catch (error) {
+      res.status(500).json({ error: "Erro ao buscar configurações." });
+    }
+  }
+
+  private update(req: Request, res: Response) {
+    if (!checkSuperAdmin(req, res, this.db)) return;
+    const { global_maintenance, global_warning } = req.body;
+    
+    try {
+      this.db.exec('BEGIN TRANSACTION');
+      if (global_maintenance !== undefined) {
+        this.db.prepare('UPDATE settings SET value = ? WHERE key = ?').run(global_maintenance ? '1' : '0', 'global_maintenance');
+      }
+      if (global_warning !== undefined) {
+        this.db.prepare('UPDATE settings SET value = ? WHERE key = ?').run(global_warning, 'global_warning');
+      }
+      this.db.exec('COMMIT');
+      res.json({ success: true });
+    } catch (error) {
+      this.db.exec('ROLLBACK');
+      res.status(500).json({ error: "Erro ao atualizar configurações." });
+    }
+  }
+}
+
 class CanteenController extends BaseController {
   constructor(db: DatabaseSync, app: express.Application) {
     super(db, app);
@@ -989,10 +1063,10 @@ class CanteenController extends BaseController {
 
   private update(req: Request, res: Response) {
     if (!checkGestor(req, res, this.db) && !checkSuperAdmin(req, res, this.db)) return;
-    const { name, desc, location, emoji, color, open_time, close_time, points_enabled } = req.body;
+    const { name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning } = req.body;
     try {
-      const update = this.db.prepare('UPDATE canteens SET name=?, desc=?, location=?, emoji=?, color=?, open_time=?, close_time=?, points_enabled=? WHERE id=?');
-      update.run(name, desc, location, emoji, color, open_time, close_time, points_enabled !== undefined ? points_enabled : 1, req.params.id);
+      const update = this.db.prepare('UPDATE canteens SET name=?, desc=?, location=?, emoji=?, color=?, open_time=?, close_time=?, points_enabled=?, maintenance_mode=?, global_warning=? WHERE id=?');
+      update.run(name, desc, location, emoji, color, open_time, close_time, points_enabled !== undefined ? points_enabled : 1, maintenance_mode !== undefined ? maintenance_mode : 0, global_warning || '', req.params.id);
       res.json({ success: true });
     } catch (error) {
       res.status(500).json({ error: "Erro ao atualizar cantina." });
@@ -1001,11 +1075,11 @@ class CanteenController extends BaseController {
 
   private create(req: Request, res: Response) {
     if (!checkSuperAdmin(req, res, this.db)) return;
-    const { name, desc, location, emoji, color, open_time, close_time, points_enabled } = req.body;
+    const { name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning } = req.body;
     if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
     try {
-      const insert = this.db.prepare('INSERT INTO canteens (name, desc, location, emoji, color, open_time, close_time, points_enabled) VALUES (?, ?, ?, ?, ?, ?, ?, ?)');
-      const result = insert.run(name, desc || '', location || '', emoji || '🍽️', color || '#ffffff', open_time || '08:00', close_time || '18:00', points_enabled !== undefined ? points_enabled : 1);
+      const insert = this.db.prepare('INSERT INTO canteens (name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      const result = insert.run(name, desc || '', location || '', emoji || '🍽️', color || '#ffffff', open_time || '08:00', close_time || '18:00', points_enabled !== undefined ? points_enabled : 1, maintenance_mode !== undefined ? maintenance_mode : 0, global_warning || '');
       res.status(201).json({ success: true, canteenId: result.lastInsertRowid });
     } catch (error) {
       res.status(500).json({ error: "Erro ao criar cantina." });
@@ -1281,6 +1355,75 @@ class RatingController extends BaseController {
   }
 }
 
+interface IOrderStatusUpdateStrategy {
+  updateStatus(
+    db: DatabaseSync,
+    orderId: string,
+    status: string,
+    cancelReason?: string
+  ): void;
+}
+
+class CanceladoStrategy implements IOrderStatusUpdateStrategy {
+  updateStatus(db: DatabaseSync, orderId: string, status: string, cancelReason?: string) {
+    const order = db.prepare('SELECT status, items, user_id FROM orders WHERE id=?').get(orderId) as any;
+    if (order && order.status !== 'cancelado') {
+      const itemsArr = JSON.parse(order.items);
+      const restoreStock = db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?');
+      const restoreStockByName = db.prepare('UPDATE products SET stock = stock + ? WHERE name = ?');
+      let pointsToRestore = 0;
+      for (const item of itemsArr) {
+        if (item.id) {
+          restoreStock.run(item.qty, item.id);
+        } else if (item.name) {
+          restoreStockByName.run(item.qty, item.name);
+        }
+        if (item.isReward && item.points_price) {
+           pointsToRestore += item.points_price * item.qty;
+        }
+      }
+      if (pointsToRestore > 0 && order.user_id) {
+          db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(pointsToRestore, order.user_id);
+      }
+    }
+    db.prepare('UPDATE orders SET status=?, cancel_reason=? WHERE id=?').run(status, cancelReason || null, orderId);
+  }
+}
+
+class RetiradoStrategy implements IOrderStatusUpdateStrategy {
+  updateStatus(db: DatabaseSync, orderId: string, status: string) {
+    const order = db.prepare('SELECT status, user_id, total, points_awarded, canteen_id FROM orders WHERE id=?').get(orderId) as any;
+    if (order && order.status !== 'retirado' && !order.points_awarded && order.user_id) {
+      const canteen = db.prepare('SELECT points_enabled FROM canteens WHERE id=?').get(order.canteen_id) as any;
+      const isPointsEnabled = canteen && canteen.points_enabled === 1;
+
+      const pointsEarned = Math.floor(order.total);
+      if (pointsEarned > 0 && isPointsEnabled) {
+        db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(pointsEarned, order.user_id);
+      }
+      db.prepare('UPDATE orders SET status=?, points_awarded=1 WHERE id=?').run(status, orderId);
+    } else {
+      db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, orderId);
+    }
+  }
+}
+
+class DefaultStatusStrategy implements IOrderStatusUpdateStrategy {
+  updateStatus(db: DatabaseSync, orderId: string, status: string) {
+    db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, orderId);
+  }
+}
+
+class OrderStatusStrategyContext {
+  static getStrategy(status: string): IOrderStatusUpdateStrategy {
+    switch (status) {
+      case 'cancelado': return new CanceladoStrategy();
+      case 'retirado': return new RetiradoStrategy();
+      default: return new DefaultStatusStrategy();
+    }
+  }
+}
+
 class OrderController extends BaseController {
   constructor(db: DatabaseSync, app: express.Application) {
     super(db, app);
@@ -1503,45 +1646,8 @@ class OrderController extends BaseController {
     try {
       this.db.exec('BEGIN TRANSACTION');
       
-      if (status === 'cancelado') {
-        const order = this.db.prepare('SELECT status, items, user_id FROM orders WHERE id=?').get(req.params.id) as any;
-        if (order && order.status !== 'cancelado') {
-          const itemsArr = JSON.parse(order.items);
-          const restoreStock = this.db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?');
-          const restoreStockByName = this.db.prepare('UPDATE products SET stock = stock + ? WHERE name = ?');
-          let pointsToRestore = 0;
-          for (const item of itemsArr) {
-            if (item.id) {
-              restoreStock.run(item.qty, item.id);
-            } else if (item.name) {
-              restoreStockByName.run(item.qty, item.name);
-            }
-            if (item.isReward && item.points_price) {
-               pointsToRestore += item.points_price * item.qty;
-            }
-          }
-          if (pointsToRestore > 0 && order.user_id) {
-              this.db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(pointsToRestore, order.user_id);
-          }
-        }
-        this.db.prepare('UPDATE orders SET status=?, cancel_reason=? WHERE id=?').run(status, cancel_reason || null, req.params.id);
-      } else if (status === 'retirado') {
-        const order = this.db.prepare('SELECT status, user_id, total, points_awarded, canteen_id FROM orders WHERE id=?').get(req.params.id) as any;
-        if (order && order.status !== 'retirado' && !order.points_awarded && order.user_id) {
-          const canteen = this.db.prepare('SELECT points_enabled FROM canteens WHERE id=?').get(order.canteen_id) as any;
-          const isPointsEnabled = canteen && canteen.points_enabled === 1;
-
-          const pointsEarned = Math.floor(order.total);
-          if (pointsEarned > 0 && isPointsEnabled) {
-            this.db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(pointsEarned, order.user_id);
-          }
-          this.db.prepare('UPDATE orders SET status=?, points_awarded=1 WHERE id=?').run(status, req.params.id);
-        } else {
-          this.db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, req.params.id);
-        }
-      } else {
-        this.db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, req.params.id);
-      }
+      const strategy = OrderStatusStrategyContext.getStrategy(status);
+      strategy.updateStatus(this.db, req.params.id, status, cancel_reason);
       
       this.db.exec('COMMIT');
       res.json({ success: true });
@@ -1588,7 +1694,8 @@ class AppServer {
       new CategoryController(this.dbManager.db, this.app),
       new RatingController(this.dbManager.db, this.app),
       new OrderController(this.dbManager.db, this.app),
-      new TagController(this.dbManager.db, this.app)
+      new TagController(this.dbManager.db, this.app),
+      new SettingsController(this.dbManager.db, this.app)
     ];
 
     for (const controller of controllers) {
