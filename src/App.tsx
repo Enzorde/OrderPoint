@@ -1,8 +1,10 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { globalEventBus, OrderStatusFactory, CartItem, showToast as globalShowToast, OrderActionConfig } from './patterns';
 import EmojiPicker from 'emoji-picker-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
+import Cropper from 'react-easy-crop';
+import { getCroppedImg } from './cropUtils';
 
 function LazyMedia({ imageUrl, emoji, alt, className, style, onClick, onMouseEnter, onMouseLeave, title }: { imageUrl?: string, emoji?: string, alt?: string, className?: string, style?: React.CSSProperties, onClick?: () => void, onMouseEnter?: (e: React.MouseEvent) => void, onMouseLeave?: (e: React.MouseEvent) => void, title?: string }) {
   const [loaded, setLoaded] = useState(false);
@@ -428,6 +430,8 @@ function ToastNotifier() {
 }
 
 export default function App() {
+  const [isHelpModalOpen, setIsHelpModalOpen] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [currentScreen, setCurrentScreen] = useState<Screen>(() => {
     const saved = localStorage.getItem('currentUser');
     if (saved) {
@@ -717,6 +721,7 @@ export default function App() {
       return;
     }
     
+    setIsSubmitting(true);
     // Group items by canteen
     const ordersByCanteen: Record<number, CartItem[]> = {};
     for (const item of cart) {
@@ -768,6 +773,8 @@ export default function App() {
       fetchProducts();
     } catch (err: any) {
       showToast(err.message || 'Erro de conexão com o servidor.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
@@ -816,8 +823,16 @@ export default function App() {
       )}
       {showNavbar && (
         <nav id="navbar">
-          <div className="nav-logo" onClick={() => goTo(currentUser?.role === 'manager' ? 'gestor' : 'cantinas')} style={{ cursor: 'pointer' }}>🍽️ OrderPoint</div>
+          <div className="nav-logo" onClick={() => goTo(currentUser?.role === 'manager' ? 'gestor' : 'cantinas')} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}><img src="/logo.png" alt="Logo" style={{ height: 32, objectFit: 'contain' }} /> <img src="/op.png" alt="OrderPoint" style={{ height: 24, objectFit: 'contain' }} /></div>
           <div className="nav-right">
+            <button
+              className="btn-outline"
+              style={{ padding: '6px 12px', fontSize: 13, border: 'none', background: 'var(--card)' }}
+              onClick={() => setIsHelpModalOpen(true)}
+              title="Ajuda e Documentação"
+            >
+              ❓ Ajuda
+            </button>
             <span 
               className="nav-user" 
               id="nav-username" 
@@ -868,7 +883,7 @@ export default function App() {
           {currentScreen === 'esqueci-senha' && <ScreenEsqueciSenha goTo={goTo} />}
           {currentScreen === 'cantinas' && <ScreenCantinas goTo={goTo} canteens={canteens} setSelectedCanteen={setSelectedCanteen} />}
           {currentScreen === 'catalogo' && <ScreenCatalogo goTo={goTo} addToCart={addToCart} products={products} selectedCanteen={selectedCanteen} categories={categories} tags={tags} currentUser={currentUser} cart={cart} showToast={showToast} />}
-          {currentScreen === 'carrinho' && <ScreenCarrinho goBack={handleGoBackFromCart} cart={cart} changeQty={changeQty} clearCart={clearCart} finalizarPedido={finalizarPedido} couponCodeState={couponCodeState} setCouponCodeState={setCouponCodeState} handleApplyCoupon={handleApplyCoupon} appliedCoupon={appliedCoupon} couponError={couponError} setCouponError={setCouponError} selectedCanteen={selectedCanteen} />}
+          {currentScreen === 'carrinho' && <ScreenCarrinho goBack={handleGoBackFromCart} cart={cart} changeQty={changeQty} clearCart={clearCart} finalizarPedido={finalizarPedido} isSubmitting={isSubmitting} couponCodeState={couponCodeState} setCouponCodeState={setCouponCodeState} handleApplyCoupon={handleApplyCoupon} appliedCoupon={appliedCoupon} couponError={couponError} setCouponError={setCouponError} selectedCanteen={selectedCanteen} products={products} />}
           {currentScreen === 'confirmacao' && <ScreenConfirmacao goTo={goTo} orderCode={orderCode} />}
           {currentScreen === 'status' && <ScreenStatus goTo={goTo} orderCode={orderCode} />}
           {currentScreen === 'meus-pedidos' && <ScreenMeusPedidos goTo={goTo} currentUser={currentUser} setOrderCode={setOrderCode} showToast={showToast} fetchCanteens={fetchCanteens} />}
@@ -878,6 +893,120 @@ export default function App() {
           {currentScreen === 'pontos' && <ScreenPontos goTo={goTo} products={products} canteens={canteens} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} addToCart={addToCart} cart={cart} />}
         </motion.div>
       </AnimatePresence>
+
+      <AnimatePresence>
+        {isHelpModalOpen && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            style={{
+              position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
+              backgroundColor: 'rgba(0,0,0,0.5)', zIndex: 3000,
+              display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 20
+            }}
+            onClick={() => setIsHelpModalOpen(false)}
+          >
+            <motion.div
+              initial={{ scale: 0.9, opacity: 0 }}
+              animate={{ scale: 1, opacity: 1 }}
+              exit={{ scale: 0.9, opacity: 0 }}
+              style={{
+                background: 'var(--card)', padding: 30, borderRadius: 16, width: '100%', maxWidth: 600,
+                maxHeight: '90vh', overflowY: 'auto'
+              }}
+              onClick={e => e.stopPropagation()}
+            >
+              <h2 style={{ marginBottom: 16 }}>❓ Ajuda e Funcionalidades</h2>
+              <div style={{ display: 'flex', flexDirection: 'column', gap: 16, lineHeight: '1.6', color: 'var(--text)' }}>
+                {currentUser?.role === 'manager' ? (
+                  <>
+                    <p>Bem-vindo ao <strong>OrderPoint (Painel do Gestor)</strong>! Aqui estão as principais funcionalidades e dicas para o dia a dia da sua cantina:</p>
+                    
+                    <div>
+                      <strong>📋 Gestão de Pedidos (Kanban)</strong>
+                      <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
+                        Acompanhe os pedidos em tempo real. Mova os cards pelas colunas "Aguardando", "Preparo", e "Pronto". Para entregar o pedido e garantir a segurança, solicite o <strong>código de retirada</strong> ao aluno e verifique se bate com o código exibido no card.
+                      </p>
+                    </div>
+
+                    <div>
+                      <strong>🍔 Gerenciamento de Produtos e Categorias</strong>
+                      <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
+                        Na aba "Produtos", você pode adicionar itens, editar preços, definir o estoque e pausar produtos esgotados. Crie categorias, e adicione tags (como "Vegano", "Sem Glúten") para ajudar os alunos a encontrarem o que desejam.
+                      </p>
+                    </div>
+
+                    <div>
+                      <strong>🎟️ Cupons de Desconto</strong>
+                      <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
+                        Crie códigos promocionais na aba "Cupons" para atrair vendas. Você pode definir o desconto em porcentagem, o limite de vezes que o cupom pode ser usado, data de validade e o valor mínimo de compra para ativá-lo.
+                      </p>
+                    </div>
+
+                    <div>
+                      <strong>🎁 Sistema de Recompensas (Pontos)</strong>
+                      <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
+                        Na aba "Recompensas", defina produtos que os alunos poderão trocar por pontos (gratuitamente). O aluno ganha 1 ponto a cada R$ 1 gasto na plataforma automaticamente, aumentando a fidelidade.
+                      </p>
+                    </div>
+
+                    <div style={{ padding: 12, background: 'var(--primary-soft)', borderRadius: 8 }}>
+                      <strong>💡 Dica importante:</strong>
+                      <p style={{ margin: 0, color: 'var(--primary)', fontSize: 14 }}>
+                        O código de retirada (ex: A7K2) garante a segurança da entrega e evita filas. Ele também serve para encontrar o pedido rapidamente no seu painel.
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    <p>Bem-vindo ao <strong>OrderPoint</strong>! Aqui estão as principais funcionalidades e dicas para uma experiência mais rápida na cantina:</p>
+
+                    <div>
+                      <strong>🍔 Como Fazer um Pedido (Pule a Fila!)</strong>
+                      <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
+                        Navegue pelo cardápio, escolha o que deseja comer, e adicione ao carrinho. Após confirmar seu pedido, um <strong>Código de retirada (ex: A7K2)</strong> será gerado. Guarde ele, você vai precisar para pegar o seu lanche!
+                      </p>
+                    </div>
+
+                    <div>
+                      <strong>🏷️ Acompanhe o Status</strong>
+                      <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
+                        Vá em "Meus Pedidos" para ver em tempo real se a sua refeição está "Aguardando", "Em Preparo" ou "Pronto". Quando estiver pronto, vá até o balcão e apenas fale o seu código de retirada. Pronto! O lanche é seu.
+                      </p>
+                    </div>
+
+                    <div>
+                      <strong>🎟️ Uso de Cupons</strong>
+                      <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
+                        Fique de olho em promoções das cantinas! Você pode aplicar grandes descontos usando cupons fornecidos pelos gestores. Cole o código do cupom no carrinho antes de encerrar sua compra de lanches.
+                      </p>
+                    </div>
+
+                    <div>
+                      <strong>⭐️ Ganhando e Resgatando Pontos</strong>
+                      <p style={{ margin: 0, color: 'var(--muted)', fontSize: 14 }}>
+                        A cada R$ 1,00 gasto em pedidos não cancelados, você ganha 1 ponto (PTS). Vá na aba "Meus Pontos" para descobrir o saldo, e visualize diretamente nos cardápios quais itens você pode resgatar "de graça" usando os pontos acumulados!
+                      </p>
+                    </div>
+
+                    <div style={{ padding: 12, background: 'var(--primary-soft)', borderRadius: 8 }}>
+                      <strong>⚠️ Lembrete Importante:</strong>
+                      <p style={{ margin: 0, color: 'var(--primary)', fontSize: 14 }}>
+                        Não esqueça seu código de retirada! Ele é de uso único em todo o app pelo período de um dia e é sua garantia para pegar o pedido correto sem confusões na cantina!
+                      </p>
+                    </div>
+                  </>
+                )}
+              </div>
+              <div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 24 }}>
+                <button className="btn-outline" onClick={() => setIsHelpModalOpen(false)}>Fechar (Esc)</button>
+              </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       <ToastNotifier />
     </>
   );
@@ -963,7 +1092,7 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
   return (
     <div className="auth-wrapper">
       <div className="auth-card">
-        <div className="auth-logo">🍽️ OrderPoint</div>
+        <div className="auth-logo" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 16 }}><img src="/logo.png" alt="Logo" style={{ height: 56, objectFit: 'contain' }} /><img src="/op.png" alt="OrderPoint" style={{ height: 40, objectFit: 'contain' }} /></div>
         <p className="auth-subtitle">Sistema de retirada de pedidos da cantina universitária</p>
         <div className="form">
           <label>E-mail institucional
@@ -1105,7 +1234,6 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
 
   const [newCanteenName, setNewCanteenName] = useState('');
   const [newCanteenLocation, setNewCanteenLocation] = useState('');
-  const [newCanteenEmoji, setNewCanteenEmoji] = useState('🍽️');
   const [newCanteenDesc, setNewCanteenDesc] = useState('');
   const [newCanteenColor, setNewCanteenColor] = useState('#ffffff');
   const [newCanteenOpenTime, setNewCanteenOpenTime] = useState('08:00');
@@ -1205,16 +1333,14 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
 
   const handleCreateCanteen = async () => {
     if (!newCanteenName) return showToast('Nome da cantina é obrigatório');
-    if (newCanteenOpenTime >= newCanteenCloseTime) {
-      return showToast('O horário de fechamento deve ser posterior ao horário de abertura.');
-    }
+    // Remove the equality restriction completely.
     const res = await fetch('/api/canteens', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
       body: JSON.stringify({ 
         name: newCanteenName, 
         location: newCanteenLocation, 
-        emoji: newCanteenEmoji,
+        emoji: '',
         desc: newCanteenDesc,
         color: newCanteenColor,
         open_time: newCanteenOpenTime,
@@ -1225,7 +1351,6 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
     if (res.ok) {
       setNewCanteenName('');
       setNewCanteenLocation('');
-      setNewCanteenEmoji('🍽️');
       setNewCanteenDesc('');
       setNewCanteenColor('#ffffff');
       setNewCanteenOpenTime('08:00');
@@ -1246,9 +1371,6 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
 
   const handleUpdateCanteen = async (id: number) => {
     if (!editCanteenForm.name) return showToast('Nome da cantina é obrigatório');
-    if (editCanteenForm.open_time && editCanteenForm.close_time && editCanteenForm.open_time === editCanteenForm.close_time) {
-      return showToast('O horário de fechamento não pode ser igual ao de abertura.');
-    }
     const res = await fetch(`/api/canteens/${id}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
@@ -1432,7 +1554,6 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
                           <h4 style={{ fontWeight: 'bold' }}>Editar Parâmetros da Cantina</h4>
                           <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(min(100%, 180px), 1fr))', gap: 12 }}>
                             <label className="form-label">Nome<input type="text" className="form-input" value={editCanteenForm.name || ''} onChange={e => setEditCanteenForm({...editCanteenForm, name: e.target.value})} /></label>
-                            <label className="form-label">Emoji<input type="text" className="form-input" value={editCanteenForm.emoji || ''} onChange={e => setEditCanteenForm({...editCanteenForm, emoji: e.target.value})} /></label>
                             <label className="form-label">Localização<input type="text" className="form-input" value={editCanteenForm.location || ''} onChange={e => setEditCanteenForm({...editCanteenForm, location: e.target.value})} /></label>
                             <label className="form-label">Cor<input type="color" className="form-input" value={editCanteenForm.color || '#ffffff'} onChange={e => setEditCanteenForm({...editCanteenForm, color: e.target.value})} style={{ padding: 2, height: 44 }} /></label>
                             <label className="form-label">Abertura<input type="time" className="form-input" value={editCanteenForm.open_time || ''} onChange={e => setEditCanteenForm({...editCanteenForm, open_time: e.target.value})} /></label>
@@ -1474,8 +1595,12 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
                       ) : (
                         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 12 }}>
                           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexWrap: 'wrap' }}>
-                            <div className="canteen-icon-bg" style={{ fontSize: 32, width: 48, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', background: c.color || '#eee', borderRadius: '50%', position: 'relative', overflow: 'hidden' }}>
-                              <span style={{ position: 'relative', zIndex: 1 }}>{c.emoji}</span>
+                            <div className="canteen-icon-bg" style={{ width: 48, height: 48, display: 'flex', alignItems: 'center', justifyContent: 'center', background: c.color || '#eee', borderRadius: '50%', position: 'relative', overflow: 'hidden' }}>
+                              {c.image_url ? (
+                                <img src={c.image_url} alt={c.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              ) : (
+                                <span style={{ position: 'relative', zIndex: 1, fontSize: 16, fontWeight: 'bold', color: '#333' }}>{c.name.substring(0, 2).toUpperCase()}</span>
+                              )}
                             </div>
                             <div>
                               <div style={{ fontWeight: 'bold', fontSize: 16 }}>{c.name} (ID: {c.id})</div>
@@ -1502,9 +1627,6 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
                 </label>
                 <label className="form-label">Localização
                   <input type="text" className="form-input" value={newCanteenLocation} onChange={e => setNewCanteenLocation(e.target.value)} />
-                </label>
-                <label className="form-label">Emoji Representativo
-                  <input type="text" className="form-input" value={newCanteenEmoji} onChange={e => setNewCanteenEmoji(e.target.value)} />
                 </label>
                 <label className="form-label">Cor (Hexadecimal)
                   <input type="color" className="form-input" value={newCanteenColor} onChange={e => setNewCanteenColor(e.target.value)} style={{ padding: 4, height: 44 }} />
@@ -1728,7 +1850,7 @@ function ScreenLoginGestor({ goTo, setCurrentUser, showToast }: { goTo: (s: Scre
   return (
     <div className="auth-wrapper">
       <div className="auth-card">
-        <div className="auth-logo">🍽️ OrderPoint</div>
+        <div className="auth-logo" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 16 }}><img src="/logo.png" alt="Logo" style={{ height: 56, objectFit: 'contain' }} /><img src="/op.png" alt="OrderPoint" style={{ height: 40, objectFit: 'contain' }} /></div>
         <div className="tag tag-orange">Acesso Restrito</div>
         
         <div style={{ marginTop: 24, textAlign: 'left' }}>
@@ -1938,7 +2060,7 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
   return (
     <div className="auth-wrapper">
       <div className="auth-card" style={{ maxWidth: 480 }}>
-        <div className="auth-logo">🍽️ OrderPoint</div>
+        <div className="auth-logo" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 16 }}><img src="/logo.png" alt="Logo" style={{ height: 56, objectFit: 'contain' }} /><img src="/op.png" alt="OrderPoint" style={{ height: 40, objectFit: 'contain' }} /></div>
         <p className="auth-subtitle">Crie sua conta com e-mail institucional</p>
         <div className="form">
           {step === 'form' ? (
@@ -2101,7 +2223,7 @@ function ScreenEsqueciSenha({ goTo }: { goTo: (s: Screen) => void }) {
   return (
     <div className="auth-wrapper">
       <div className="auth-card" style={{ maxWidth: 480 }}>
-        <div className="auth-logo">🍽️ OrderPoint</div>
+        <div className="auth-logo" style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 12, marginBottom: 16 }}><img src="/logo.png" alt="Logo" style={{ height: 56, objectFit: 'contain' }} /><img src="/op.png" alt="OrderPoint" style={{ height: 40, objectFit: 'contain' }} /></div>
         <p className="auth-subtitle">Recuperação de Senha</p>
         <div className="form">
           {step === 'email' ? (
@@ -2167,6 +2289,10 @@ export const isCanteenOpen = (canteen: Canteen) => {
   const openTime = openH * 60 + openM;
   const closeTime = closeH * 60 + closeM;
 
+  if (openTime === closeTime) {
+    return true; // 24 hours open
+  }
+
   if (closeTime < openTime) {
     return currentTime >= openTime || currentTime <= closeTime;
   }
@@ -2202,7 +2328,13 @@ function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Scre
                   MANUTENÇÃO
                 </div>
               )}
-              <LazyMedia className="cantina-img" style={{ background: canteen.color }} emoji={canteen.emoji} imageUrl={canteen.image_url} alt={canteen.name} />
+              {canteen.image_url ? (
+                <img className="cantina-img" src={canteen.image_url} alt={canteen.name} style={{ width: '100%', height: 120, objectFit: 'cover', borderRadius: '16px 16px 0 0', background: canteen.color }} />
+              ) : (
+                <div className="cantina-img" style={{ background: canteen.color || '#eee', width: '100%', height: 120, borderRadius: '16px 16px 0 0', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                  <span style={{ fontSize: 36, fontWeight: 'bold', color: '#1f2937' }}>{canteen.name.substring(0, 2).toUpperCase()}</span>
+                </div>
+              )}
               <div className="cantina-info">
                 <h3>{canteen.name}</h3>
                 {canteen.location && (
@@ -2220,7 +2352,7 @@ function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Scre
                     {isOpen ? 'Aberta' : 'Fechada'}
                   </strong> 
                   <span style={{ fontSize: 12, color: 'var(--muted)' }}>
-                    {' '}· {isOpen ? `Fecha às ${canteen.close_time}` : `Abre às ${canteen.open_time}`}
+                    {' '}· {canteen.open_time === canteen.close_time ? '24 Horas' : (isOpen ? `Fecha às ${canteen.close_time}` : `Abre às ${canteen.open_time}`)}
                   </span>
                 </div>
               </div>
@@ -2387,7 +2519,9 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
                       🎟️ {p.points_price} PTS
                     </button>
                   ) : (
-                    <div style={{ height: '38px' }}></div>
+                    <button className="btn-outline btn-sm" style={{ visibility: 'hidden', pointerEvents: 'none', padding: '10px' }} aria-hidden="true">
+                      &nbsp;
+                    </button>
                   )}
                 </div>
               </div>
@@ -2454,9 +2588,10 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
                 borderRadius: '50%',
                 display: 'flex', alignItems: 'center', justifyContent: 'center',
                 margin: '0 auto 24px auto',
-                boxShadow: 'inset 0 4px 12px rgba(0,0,0,0.05)'
+                boxShadow: 'inset 0 4px 12px rgba(0,0,0,0.05)',
+                overflow: 'hidden'
               }}>
-                {selectedProduct.emoji}
+                <LazyMedia emoji={selectedProduct.emoji} imageUrl={selectedProduct.image_url} alt={selectedProduct.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
               </div>
               
               <h2 style={{ margin: '0 0 8px 0', fontSize: 24, color: 'var(--text)' }}>{selectedProduct.name}</h2>
@@ -2538,7 +2673,7 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
   );
 }
 
-function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, couponCodeState, setCouponCodeState, handleApplyCoupon, appliedCoupon, couponError, setCouponError, selectedCanteen }: { goBack: () => void, cart: CartItem[], changeQty: (i: number, d: number) => void, clearCart: () => void, finalizarPedido: () => void, couponCodeState: string, setCouponCodeState: (s: string) => void, handleApplyCoupon: (c: string) => void, appliedCoupon: any, couponError: string, setCouponError: (e: string) => void, selectedCanteen: Canteen | null }) {
+function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, isSubmitting, couponCodeState, setCouponCodeState, handleApplyCoupon, appliedCoupon, couponError, setCouponError, selectedCanteen, products }: { goBack: () => void, cart: CartItem[], changeQty: (i: number, d: number) => void, clearCart: () => void, finalizarPedido: () => void, isSubmitting: boolean, couponCodeState: string, setCouponCodeState: (s: string) => void, handleApplyCoupon: (c: string) => void, appliedCoupon: any, couponError: string, setCouponError: (e: string) => void, selectedCanteen: Canteen | null, products: Product[] }) {
   const isMaintenanceMode = selectedCanteen?.maintenance_mode === 1;
   const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
   const totalPoints = cart.reduce((sum, item) => sum + (item.isReward && item.points_price ? item.points_price * item.qty : 0), 0);
@@ -2566,7 +2701,9 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, c
             ) : (
               cart.map((item, idx) => (
                 <div className="cart-item" key={item.name}>
-                  <span className="cart-emoji">{item.emoji}</span>
+                  <div className="cart-emoji" style={{ overflow: 'hidden', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+                    <LazyMedia emoji={item.emoji} imageUrl={(products.find(p => p.name === item.name) || {}).image_url} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
                   <div className="cart-item-info">
                     <div className="cart-item-name">{item.name}</div>
                     <div className="cart-item-price">
@@ -2591,7 +2728,7 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, c
           </div>
           <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
             <button className="btn-secondary btn-sm" onClick={goBack}>← Voltar</button>
-            <button className="btn-danger btn-sm" onClick={clearCart}>🗑 Limpar carrinho</button>
+            <button className="btn-danger btn-sm" onClick={() => { if(window.confirm('Tem certeza que deseja esvaziar seu carrinho?')) clearCart(); }}>🗑 Esvaziar carrinho</button>
           </div>
         </div>
         <div>
@@ -2686,8 +2823,13 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, c
               </div>
             )}
             
-            <button className="btn-orange btn-full" style={{ marginTop: 20 }} onClick={finalizarPedido} disabled={isMaintenanceMode}>
-              ✅ Finalizar Pedido
+            <button 
+              className="btn-orange btn-full" 
+              style={{ marginTop: 20 }} 
+              onClick={finalizarPedido} 
+              disabled={isMaintenanceMode || isSubmitting}
+            >
+              {isSubmitting ? 'Finalizando...' : '✅ Finalizar Pedido'}
             </button>
           </div>
         </div>
@@ -2749,7 +2891,7 @@ function ScreenStatus({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCod
     <div className="page" style={{ maxWidth: 600 }}>
       <div className="hero">
         <h1>📍 Status do Pedido</h1>
-        <p>Código: <strong style={{ color: 'var(--orange)' }}>{orderCode}</strong></p>
+        <p>Código de retirada: <strong style={{ color: 'var(--orange)' }}>{orderCode}</strong></p>
       </div>
       <div className="card">
         {status === 'cancelado' ? (
@@ -2983,8 +3125,9 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
   const now = new Date();
 
   const filterByPeriod = (orderDateStr: string, period: 'dia' | 'semana' | 'mes' | 'semestre' | 'ano') => {
-    const orderDate = new Date(orderDateStr.replace(' ', 'T') + 'Z');
-    const diffTime = now.getTime() - orderDate.getTime();
+    const orderDate = new Date(orderDateStr.replace(' ', 'T'));
+    const nowLocal = new Date();
+    const diffTime = nowLocal.getTime() - orderDate.getTime();
     const diffDays = diffTime / (1000 * 60 * 60 * 24);
     
     if (period === 'dia') return diffDays <= 1;
@@ -2994,11 +3137,8 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
     return diffDays <= 365;
   };
 
-  const todayStr = new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
-  const todayOrders = activeOrders.filter(o => {
-    const orderDate = new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
-    return orderDate === todayStr;
-  });
+  const todayStr = new Date().toISOString().split('T')[0];
+  const todayOrders = activeOrders.filter(o => o.created_at.startsWith(todayStr));
   const todayRevenue = todayOrders.reduce((acc, o) => acc + o.total, 0);
 
   const cardOrders = activeOrders.filter(o => filterByPeriod(o.created_at, cardRevenuePeriod === 'anual' ? 'ano' : 'semestre'));
@@ -3009,9 +3149,10 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
   const revenueOrders = activeOrders.filter(o => filterByPeriod(o.created_at, revenuePeriod));
 
   revenueOrders.forEach(o => {
-    const day = new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' });
+    const day = o.created_at.split(' ')[0];
     groupedRevenue[day] = (groupedRevenue[day] || 0) + o.total;
   });
+
   
   const lineChartData = Object.keys(groupedRevenue).sort().map(date => ({
     date: date.substring(5).split('-').reverse().join('/'),
@@ -3057,7 +3198,7 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
   const hourlyOrders = activeOrders.filter(o => filterByPeriod(o.created_at, hourlyPeriod));
   hourlyOrders.forEach(o => {
     // get hours in local time
-    const localDate = new Date(new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+    const localDate = new Date(o.created_at.replace(' ', 'T'));
     const hour = localDate.getHours();
     salesByHour[hour]++;
   });
@@ -3085,7 +3226,7 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
   const salesByWeekday = Array(7).fill(0);
   const weekdayOrders = activeOrders.filter(o => filterByPeriod(o.created_at, weekdayPeriod));
   weekdayOrders.forEach(o => {
-    const localDate = new Date(new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleString('en-US', { timeZone: 'America/Sao_Paulo' }));
+    const localDate = new Date(o.created_at.replace(' ', 'T'));
     const day = localDate.getDay();
     salesByWeekday[day] += o.total;
   });
@@ -3300,7 +3441,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   const [activeTab, setActiveTab] = useState<'dashboard' | 'pedidos' | 'gerenciar_produtos' | 'config' | 'cupons'>('dashboard');
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderFilter, setOrderFilter] = useState<string>('todos');
-  const [orderDateFilter, setOrderDateFilter] = useState<string>(new Date().toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }));
+  const [orderDateFilter, setOrderDateFilter] = useState<string>(new Date().toISOString().split('T')[0]);
   const [orderSortMethod, setOrderSortMethod] = useState<'desc' | 'asc'>('desc');
   const [orderSearchQuery, setOrderSearchQuery] = useState<string>('');
   const [productSearchQuery, setProductSearchQuery] = useState<string>('');
@@ -3316,6 +3457,12 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   const [canteenDesc, setCanteenDesc] = useState(myCanteen?.desc || '');
   const [canteenLocation, setCanteenLocation] = useState(myCanteen?.location || '');
   const [canteenEmoji, setCanteenEmoji] = useState(myCanteen?.emoji || '');
+  const [canteenImageUrl, setCanteenImageUrl] = useState(myCanteen?.image_url || '');
+  const [unCroppedImageUrl, setUnCroppedImageUrl] = useState('');
+  const [crop, setCrop] = useState({ x: 0, y: 0 });
+  const [zoom, setZoom] = useState(1);
+  const [croppedAreaPixels, setCroppedAreaPixels] = useState<any>(null);
+  const [isCropping, setIsCropping] = useState(false);
   const [canteenColor, setCanteenColor] = useState(myCanteen?.color || '#ffffff');
   const [openTime, setOpenTime] = useState(myCanteen?.open_time || '08:00');
   const [closeTime, setCloseTime] = useState(myCanteen?.close_time || '18:00');
@@ -3330,6 +3477,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
       setCanteenDesc(myCanteen.desc);
       setCanteenLocation(myCanteen.location || '');
       setCanteenEmoji(myCanteen.emoji);
+      setCanteenImageUrl(myCanteen.image_url || '');
       setCanteenColor(myCanteen.color);
       setOpenTime(myCanteen.open_time);
       setCloseTime(myCanteen.close_time);
@@ -3337,13 +3485,68 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
       setMaintenanceMode(myCanteen.maintenance_mode !== undefined ? myCanteen.maintenance_mode === 1 : false);
       setGlobalWarning(myCanteen.global_warning || '');
     }
-  }, [myCanteen]);
+  }, [myCanteen?.id]);
+
+  const onCropComplete = useCallback((croppedArea: any, croppedAreaPixels: any) => {
+    setCroppedAreaPixels(croppedAreaPixels);
+  }, []);
+
+  const generateCroppedImage = async () => {
+    try {
+      const croppedImage = await getCroppedImg(unCroppedImageUrl, croppedAreaPixels);
+      setCanteenImageUrl(croppedImage || '');
+      setIsCropping(false);
+      setUnCroppedImageUrl('');
+    } catch (e) {
+      console.error(e);
+      globalShowToast('Erro ao recortar imagem');
+      setIsCropping(false);
+    }
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setUnCroppedImageUrl(event.target?.result as string);
+      setIsCropping(true);
+      setZoom(1);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const onProductCropComplete = useCallback((croppedArea: any, croppedAreaPixels: any) => {
+    setProductCroppedAreaPixels(croppedAreaPixels);
+  }, []);
+
+  const generateCroppedProductImage = async () => {
+    try {
+      const croppedImage = await getCroppedImg(unCroppedProductImageUrl, productCroppedAreaPixels);
+      setFormImageUrl(croppedImage || '');
+      setIsCroppingProduct(false);
+      setUnCroppedProductImageUrl('');
+    } catch (e) {
+      console.error(e);
+      globalShowToast('Erro ao recortar imagem');
+      setIsCroppingProduct(false);
+    }
+  };
+
+  const handleProductImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setUnCroppedProductImageUrl(event.target?.result as string);
+      setIsCroppingProduct(true);
+      setProductZoom(1);
+    };
+    reader.readAsDataURL(file);
+  };
 
   const handleSaveSettings = async () => {
     if (!myCanteen) return;
-    if (openTime === closeTime) {
-      return showToast('O horário de fechamento não pode ser igual ao de abertura.');
-    }
     try {
       await fetch(`/api/canteens/${myCanteen.id}`, {
         method: 'PUT',
@@ -3353,6 +3556,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
           desc: canteenDesc,
           location: canteenLocation,
           emoji: canteenEmoji,
+          image_url: canteenImageUrl,
           color: canteenColor,
           open_time: openTime, 
           close_time: closeTime,
@@ -3377,6 +3581,12 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   const [formPointsPrice, setFormPointsPrice] = useState('');
   const [formDesc, setFormDesc] = useState('');
   const [formEmoji, setFormEmoji] = useState('🍽️');
+  const [formImageUrl, setFormImageUrl] = useState('');
+  const [unCroppedProductImageUrl, setUnCroppedProductImageUrl] = useState('');
+  const [productCrop, setProductCrop] = useState({ x: 0, y: 0 });
+  const [productZoom, setProductZoom] = useState(1);
+  const [productCroppedAreaPixels, setProductCroppedAreaPixels] = useState<any>(null);
+  const [isCroppingProduct, setIsCroppingProduct] = useState(false);
   const [formStock, setFormStock] = useState('10');
   const [formTags, setFormTags] = useState<number[]>([]);
   const [showProductEmojiPicker, setShowProductEmojiPicker] = useState(false);
@@ -3549,6 +3759,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     setFormPointsPrice(p.points_price?.toString() || '');
     setFormDesc(p.desc);
     setFormEmoji(p.emoji);
+    setFormImageUrl(p.image_url || '');
     setFormStock(p.stock.toString());
     setFormCanteenId(p.canteen_id?.toString() || '1');
     try { setFormTags(JSON.parse(p.tags || '[]')); } catch (e) { setFormTags([]); }
@@ -3564,6 +3775,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     setFormPointsPrice('');
     setFormDesc('');
     setFormEmoji('🍽️');
+    setFormImageUrl('');
     setFormStock('10');
     setFormTags([]);
     setIsProductFormVisible(true);
@@ -3583,6 +3795,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
       points_price: formPointsPrice ? parseInt(formPointsPrice, 10) : null,
       desc: formDesc,
       emoji: formEmoji,
+      image_url: formImageUrl,
       stock: parseInt(formStock, 10) || 0,
       tags: JSON.stringify(formTags)
     };
@@ -3736,23 +3949,79 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
               <label>Localização
                 <input type="text" value={canteenLocation} onChange={e => setCanteenLocation(e.target.value)} />
               </label>
-              <label style={{ position: 'relative' }}>Emoji
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input type="text" value={canteenEmoji} readOnly style={{ width: 60, textAlign: 'center', cursor: 'pointer' }} onClick={() => setShowEmojiPicker(!showEmojiPicker)} />
-                  <button className="btn-secondary" onClick={() => setShowEmojiPicker(!showEmojiPicker)}>Escolher Emoji</button>
-                </div>
-                {showEmojiPicker && (
-                  <div style={{ position: 'absolute', zIndex: 10, top: '100%', left: 0, marginTop: 4 }}>
-                    <EmojiPicker onEmojiClick={(emojiData) => {
-                      setCanteenEmoji(emojiData.emoji);
-                      setShowEmojiPicker(false);
-                    }} />
-                  </div>
-                )}
-              </label>
-              <label>Cor de Fundo
+              <label>Cor de Fundo (Secundária)
                 <input type="color" value={canteenColor} onChange={e => setCanteenColor(e.target.value)} style={{ height: 40, padding: 0, cursor: 'pointer' }} />
               </label>
+              <div style={{ marginBottom: 16 }}>
+                <label style={{ display: 'block', marginBottom: 8, fontWeight: 500 }}>Imagem da Cantina</label>
+                <div 
+                  style={{ 
+                    border: '2px dashed var(--line)', 
+                    borderRadius: 12, 
+                    textAlign: 'center',
+                    cursor: 'pointer',
+                    position: 'relative',
+                    background: 'var(--bg-secondary)',
+                    overflow: 'hidden',
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    minHeight: 120,
+                    padding: canteenImageUrl ? 0 : 32
+                  }}
+                  onClick={() => document.getElementById('canteenImageUpload')?.click()}
+                >
+                  {canteenImageUrl ? (
+                    <>
+                      <div style={{ width: '100%' }}>
+                        <img src={canteenImageUrl} alt="Preview" style={{ width: '100%', aspectRatio: '35 / 12', objectFit: 'cover', borderRadius: 12, background: canteenColor, display: 'block' }} />
+                      </div>
+                      <div className="hover-overlay" style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.2s', color: '#fff', fontWeight: 'bold' }} 
+                        onMouseEnter={e => e.currentTarget.style.opacity='1'} 
+                        onMouseLeave={e => e.currentTarget.style.opacity='0'}>
+                        Trocar Imagem
+                      </div>
+                    </>
+                  ) : (
+                    <div style={{ color: 'var(--muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: 40 }}>📸</span>
+                      <span style={{ fontWeight: 500 }}>Clique para adicionar a foto da cantina</span>
+                      <span style={{ fontSize: 12 }}>Formatos aceitos: JPG, PNG, GIF</span>
+                    </div>
+                  )}
+                  <input id="canteenImageUpload" type="file" accept="image/*" onChange={(e) => { handleImageUpload(e); e.target.value = ''; }} style={{ display: 'none' }} />
+                </div>
+                {canteenImageUrl && (
+                  <div style={{ marginTop: 8, textAlign: 'center' }}>
+                    <button type="button" className="btn-danger btn-sm" onClick={() => setCanteenImageUrl('')}>Remover Imagem</button>
+                  </div>
+                )}
+                {isCropping && (
+                  <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                    <div style={{ position: 'relative', width: '100%', maxWidth: 800, height: '70vh', background: '#000' }}>
+                      <Cropper
+                        image={unCroppedImageUrl}
+                        crop={crop}
+                        zoom={zoom}
+                        maxZoom={3}
+                        aspect={350 / 120}
+                        onCropChange={setCrop}
+                        onCropComplete={onCropComplete}
+                        onZoomChange={setZoom}
+                        style={{ containerStyle: { background: '#222' } }}
+                      />
+                    </div>
+                    <div style={{ padding: 20, display: 'flex', gap: 16, background: 'var(--card)', width: '100%', maxWidth: 800, borderBottomLeftRadius: 16, borderBottomRightRadius: 16 }}>
+                      <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
+                        <span style={{ color: 'var(--text)', fontSize: 14 }}>Zoom</span>
+                        <input type="range" min={1} max={3} step={0.1} value={zoom} onChange={(e) => setZoom(Number(e.target.value))} style={{ flex: 1 }} />
+                      </div>
+                      <button className="btn-secondary" onClick={() => setIsCropping(false)}>Cancelar</button>
+                      <button className="btn-orange" onClick={generateCroppedImage}>Confirmar Recorte</button>
+                    </div>
+                  </div>
+                )}
+              </div>
               <label>Horário de Abertura
                 <input type="time" value={openTime} onChange={e => setOpenTime(e.target.value)} />
               </label>
@@ -3945,7 +4214,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                 })
                 .filter(o => {
                   if (!orderDateFilter) return true;
-                  const orderDate = new Date(o.created_at.replace(' ', 'T') + 'Z').toLocaleDateString('en-CA', { timeZone: 'America/Sao_Paulo' }); // en-CA gives YYYY-MM-DD
+                  const orderDate = o.created_at.split(' ')[0];
                   return orderDate === orderDateFilter;
                 })
                 .filter(o => {
@@ -4032,10 +4301,12 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
               )
               .map(p => (
               <div className="order-card" key={p.id}>
-                <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
-                  <span style={{ fontSize: 28 }}>{p.emoji}</span>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 16 }}>
+                  <div style={{ width: 80, height: 80, flexShrink: 0, borderRadius: 12, overflow: 'hidden', background: 'var(--bg-secondary)', border: '1px solid var(--line)' }}>
+                    <LazyMedia emoji={p.emoji} imageUrl={p.image_url} alt={p.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                  </div>
                   <div>
-                    <div className="order-id">{p.name}</div>
+                    <div className="order-id" style={{ fontSize: 16, marginBottom: 4 }}>{p.name}</div>
                     <div className="order-meta">{p.cat} · R$ {p.price.toFixed(2).replace('.', ',')} · Estoque: {p.stock}</div>
                   </div>
                 </div>
@@ -4077,20 +4348,73 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
               <h3 style={{ margin: 0 }}>{editingId ? 'Editar Produto' : 'Adicionar ao Cardápio'}</h3>
             </div>
             <div className="form">
-              <label style={{ position: 'relative' }}>Emoji
-                <div style={{ display: 'flex', gap: 8 }}>
-                  <input type="text" value={formEmoji} readOnly style={{ width: 60, textAlign: 'center', cursor: 'pointer' }} onClick={() => setShowProductEmojiPicker(!showProductEmojiPicker)} />
-                  <button className="btn-secondary" onClick={() => setShowProductEmojiPicker(!showProductEmojiPicker)}>Escolher Emoji</button>
-                </div>
-                {showProductEmojiPicker && (
-                  <div style={{ position: 'absolute', zIndex: 10, top: '100%', left: 0, marginTop: 4 }}>
-                    <EmojiPicker onEmojiClick={(emojiData) => {
-                      setFormEmoji(emojiData.emoji);
-                      setShowProductEmojiPicker(false);
-                    }} />
+              <label style={{ display: 'block', marginBottom: 8, fontWeight: 500 }}>Imagem do Produto</label>
+              <div 
+                style={{ 
+                  border: '2px dashed var(--line)', 
+                  borderRadius: 12, 
+                  textAlign: 'center',
+                  cursor: 'pointer',
+                  position: 'relative',
+                  background: 'var(--bg-secondary)',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  minHeight: 120,
+                  padding: formImageUrl ? 0 : 32
+                }}
+                onClick={() => document.getElementById('productImageUpload')?.click()}
+              >
+                {formImageUrl ? (
+                  <>
+                    <div style={{ width: '100%' }}>
+                      <img src={formImageUrl} alt="Preview" style={{ width: '100%', aspectRatio: '1 / 1', objectFit: 'cover', borderRadius: 12, display: 'block', maxWidth: 160, margin: '0 auto' }} />
+                    </div>
+                    <div className="hover-overlay" style={{ position: 'absolute', inset: 0, background: 'rgba(0,0,0,0.5)', display: 'flex', alignItems: 'center', justifyContent: 'center', opacity: 0, transition: 'opacity 0.2s', color: '#fff', fontWeight: 'bold' }} 
+                      onMouseEnter={e => e.currentTarget.style.opacity='1'} 
+                      onMouseLeave={e => e.currentTarget.style.opacity='0'}>
+                      Trocar Imagem
+                    </div>
+                  </>
+                ) : (
+                  <div style={{ color: 'var(--muted)', display: 'flex', flexDirection: 'column', alignItems: 'center', gap: 8 }}>
+                    <span style={{ fontSize: 40 }}>📸</span>
+                    <span style={{ fontWeight: 500 }}>Clique para adicionar a foto do produto</span>
+                    <span style={{ fontSize: 12 }}>Formatos aceitos: JPG, PNG, GIF</span>
                   </div>
                 )}
-              </label>
+                <input id="productImageUpload" type="file" accept="image/*" onChange={(e) => { handleProductImageUpload(e); e.target.value = ''; }} style={{ display: 'none' }} />
+              </div>
+              {formImageUrl && (
+                <div style={{ marginTop: 8, textAlign: 'center', marginBottom: 16 }}>
+                  <button type="button" className="btn-danger btn-sm" onClick={() => setFormImageUrl('')}>Remover Imagem</button>
+                </div>
+              )}
+              {isCroppingProduct && (
+                <div style={{ position: 'fixed', inset: 0, zIndex: 9999, background: 'rgba(0,0,0,0.85)', display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center' }}>
+                  <div style={{ position: 'relative', width: '100%', maxWidth: 800, height: '70vh', background: '#000' }}>
+                    <Cropper
+                      image={unCroppedProductImageUrl}
+                      crop={productCrop}
+                      zoom={productZoom}
+                      maxZoom={3}
+                      aspect={1 / 1}
+                      onCropChange={setProductCrop}
+                      onCropComplete={onProductCropComplete}
+                      onZoomChange={setProductZoom}
+                      style={{ containerStyle: { background: '#222' } }}
+                    />
+                  </div>
+                  <div style={{ padding: 20, display: 'flex', gap: 16, background: 'var(--card)', width: '100%', maxWidth: 800, borderBottomLeftRadius: 16, borderBottomRightRadius: 16 }}>
+                    <div style={{ flex: 1, display: 'flex', alignItems: 'center', gap: 12 }}>
+                      <span style={{ color: 'var(--text)', fontSize: 14 }}>Zoom</span>
+                      <input type="range" min={1} max={3} step={0.1} value={productZoom} onChange={(e) => setProductZoom(Number(e.target.value))} style={{ flex: 1 }} />
+                    </div>
+                    <button className="btn-secondary" onClick={() => setIsCroppingProduct(false)}>Cancelar</button>
+                    <button className="btn-orange" onClick={generateCroppedProductImage}>Confirmar Recorte</button>
+                  </div>
+                </div>
+              )}
               <label>Nome do produto
                 <input type="text" placeholder="Ex: Pão de Queijo" value={formName} onChange={e => setFormName(e.target.value)} />
               </label>
