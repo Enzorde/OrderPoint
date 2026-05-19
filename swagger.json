@@ -1,0 +1,93 @@
+{
+  "openapi": "3.0.0",
+  "info": {
+    "title": "Cantina OrderPoint API",
+    "version": "1.0.0",
+    "description": "API documentation for the Cantina OrderPoint application"
+  },
+  "servers": [
+    {
+      "url": "/api"
+    }
+  ],
+  "paths": {
+    "/products": {
+      "get": {
+        "summary": "List all products",
+        "description": "Retrieve a list of all available products",
+        "responses": {
+          "200": {
+            "description": "A json array of products"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create a new product",
+        "description": "Creates a new product (Gestor only)",
+        "responses": {
+          "201": {
+            "description": "Product created successfully"
+          }
+        }
+      }
+    },
+    "/orders": {
+      "get": {
+        "summary": "List all orders",
+        "description": "Retrieve all orders",
+        "responses": {
+          "200": {
+            "description": "List of orders"
+          }
+        }
+      },
+      "post": {
+        "summary": "Create order",
+        "description": "Create a new order",
+        "responses": {
+          "201": {
+            "description": "Order created successfully"
+          }
+        }
+      }
+    },
+    "/canteens": {
+      "get": {
+        "summary": "List canteens",
+        "description": "Retrieve all canteens",
+        "responses": {
+          "200": {
+            "description": "List of canteens"
+          }
+        }
+      }
+    },
+    "/login": {
+      "post": {
+        "summary": "User Login",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "properties": {
+                  "email": { "type": "string" },
+                  "senha": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Login successful"
+          },
+          "401": {
+            "description": "Invalid credentials"
+          }
+        }
+      }
+    }
+  }
+}
