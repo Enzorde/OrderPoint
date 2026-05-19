@@ -45,9 +45,9 @@ export const showToast = (msg: string) => {
 // ---------------------------------------------------------
 
 export interface GestorCallbacks {
-  updateOrderStatus: (id: number, status: string, cancelReason?: string) => void;
-  setDeleteOrderConfirmId: (id: number) => void;
-  promptCancelReason?: (id: number) => void;
+  updateOrderStatus: (id: string | number, status: string, cancelReason?: string) => void;
+  setDeleteOrderConfirmId: (id: string | number) => void;
+  promptCancelReason?: (id: string | number) => void;
 }
 
 export interface OrderActionConfig {
@@ -59,7 +59,7 @@ export interface OrderActionConfig {
 export interface OrderStatusStrategy {
   getText(): string;
   getStyles(): { background?: string; color?: string; className?: string };
-  getActions(orderId: number, callbacks: GestorCallbacks): OrderActionConfig | null;
+  getActions(orderId: string | number, callbacks: GestorCallbacks): OrderActionConfig | null;
 }
 
 export class StatusAguardando implements OrderStatusStrategy {
@@ -116,6 +116,19 @@ export class StatusRetirado implements OrderStatusStrategy {
   }
 }
 
+export class StatusPagamentoPendente implements OrderStatusStrategy {
+  getText() { return '💳 Pagamento Pendente'; }
+  getStyles() { return { background: '#fef3c7', color: '#b45309' }; }
+  getActions(orderId: number, callbacks: GestorCallbacks): OrderActionConfig {
+    return {
+      tag: { text: 'Pagamento Pendente', className: 'tag-warning' },
+      buttons: [
+        { label: 'Cancelar', className: 'btn-danger btn-sm', action: () => callbacks.updateOrderStatus(orderId, 'cancelado') }
+      ]
+    };
+  }
+}
+
 export class StatusCancelado implements OrderStatusStrategy {
   getText() { return '❌ Cancelado'; }
   getStyles() { return { background: 'var(--danger-soft)', color: 'var(--danger)' }; }
@@ -142,6 +155,7 @@ export class StatusOutro implements OrderStatusStrategy {
 export class OrderStatusFactory {
   static createStrategy(status: string): OrderStatusStrategy {
     switch (status) {
+      case 'pagamento_pendente': return new StatusPagamentoPendente();
       case 'aguardando': return new StatusAguardando();
       case 'preparo': return new StatusPreparo();
       case 'pronto': return new StatusPronto();
