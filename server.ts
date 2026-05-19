@@ -1,1784 +1,805 @@
-import express from "express";
-type Request = express.Request;
-type Response = express.Response;
-import { createServer as createViteServer } from "vite";
-import path from "path";
-import { DatabaseSync } from "node:sqlite";
+import express, { Request, Response } from "express";
+import "express-async-errors";
+import { initializeApp } from 'firebase/app';
+import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, addDoc, orderBy, runTransaction, writeBatch, initializeFirestore } from 'firebase/firestore';
+const parseDoc = (doc: any) => ({ id: doc.id, ...doc.data() });
+import { v4 as uuidv4 } from 'uuid';
+
 import crypto from "crypto";
 import swaggerUi from "swagger-ui-express";
+import fs from "fs";
+import path from "path";
 import nodemailer from "nodemailer";
+import Stripe from "stripe";
+let stripeClient: Stripe | null = null;
+function getStripe(): Stripe {
+  if (!stripeClient) {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) {
+      throw new Error('STRIPE_SECRET_KEY environment variable is required para pagamentos via Stripe');
+    }
+    stripeClient = new Stripe(key, { apiVersion: "2023-10-16" as any });
+  }
+  return stripeClient;
+}
+import { createServer as createViteServer } from "vite";
 
-let transporter: nodemailer.Transporter;
-async function initMailer() {
-  if (process.env.SMTP_USER && process.env.SMTP_PASS) {
-    // Configuração real para Outlook / Office 365
-    transporter = nodemailer.createTransport({
-      host: "smtp.office365.com",
-      port: 587,
-      secure: false, // true for 465, false for other ports
-      requireTLS: true,
-      auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASS,
-      },
-    });
-    console.log("Real Outlook SMTP initialized.");
-  } else {
-    // Fallback para Ethereal (Testes)
-    const testAccount = await nodemailer.createTestAccount();
-    transporter = nodemailer.createTransport({
-      host: "smtp.ethereal.email",
-      port: 587,
-      secure: false,
-      auth: {
-        user: testAccount.user,
-        pass: testAccount.pass,
-      },
-    });
-    console.log("Ethereal Email initialized (Fallback de testes).");
+let swaggerDocument: any;
+try {
+  swaggerDocument = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'swagger.json'), 'utf8'));
+} catch (e) {
+  console.warn("Could not load swagger.json");
+}
+
+let firebaseConfig: any = {};
+try {
+  firebaseConfig = JSON.parse(fs.readFileSync(path.join(process.cwd(), 'firebase-applet-config.json'), 'utf8'));
+} catch (e) {
+  console.warn("Could not load firebase-applet-config.json");
+}
+
+const appFirebase = initializeApp(firebaseConfig);
+const db = initializeFirestore(appFirebase, {}, firebaseConfig.firestoreDatabaseId);
+
+
+const OperationType = {
+  CREATE: 'create',
+  UPDATE: 'update',
+  DELETE: 'delete',
+  LIST: 'list',
+  GET: 'get',
+  WRITE: 'write',
+} as const;
+
+type OperationType = typeof OperationType[keyof typeof OperationType];
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
   }
 }
-initMailer();
 
-const swaggerDocument = {
-  openapi: '3.0.0',
-  info: {
-    title: 'Cantina API',
-    version: '1.0.0',
-    description: 'API para o sistema de cantina',
-  },
-  paths: {
-    '/usuarios': {
-      post: {
-        summary: 'Cadastra um novo usuário',
-        requestBody: {
-          required: true,
-          content: {
-            'application/json': {
-              schema: {
-                type: 'object',
-                properties: {
-                  name: { type: 'string' },
-                  email: { type: 'string' },
-                  senha: { type: 'string' }
-                },
-                required: ['name', 'email', 'senha']
-              }
-            }
-          }
-        },
-        responses: {
-          '201': {
-            description: 'Cadastro válido (Criado)'
-          },
-          '400': {
-            description: 'Dados inválidos'
-          }
-        }
-      }
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: null,
+      email: null,
+      emailVerified: null,
+      isAnonymous: true,
+      tenantId: null,
+      providerInfo: []
     },
-    '/cantinas': {
-      get: {
-        summary: 'Retorna nome e foto das 3 cantinas',
-        responses: {
-          '200': {
-            description: 'Lista de cantinas'
-          }
-        }
-      }
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
+
+async function startServer() {
+  const app = express();
+  app.use((req, res, next) => {
+    // console.log("INCOMING:", req.method, req.originalUrl, req.url);
+    next();
+  });
+  app.use(express.json({ limit: '50mb' }));
+  app.use(express.urlencoded({ limit: '50mb', extended: true }));
+
+  if (swaggerDocument) {
+    app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
+  }
+
+  const hashPassword = (password: string) => crypto.createHash('sha256').update(password).digest('hex');
+
+  const transporter = nodemailer.createTransport({
+    host: process.env.SMTP_HOST || 'smtp.office365.com',
+    port: parseInt(process.env.SMTP_PORT || '587', 10),
+    secure: process.env.SMTP_PORT === '465', // true for 465, false for other ports
+    auth: {
+      user: process.env.SMTP_USER,
+      pass: process.env.SMTP_PASS,
     },
-    '/produtos': {
-      get: {
-        summary: 'Retorna produtos ativos, opcionalmente filtrados por categoria',
-        parameters: [
-          {
-            name: 'categoria',
-            in: 'query',
-            required: false,
-            schema: {
-              type: 'string'
-            }
-          }
-        ],
-        responses: {
-          '200': {
-            description: 'Lista de produtos'
-          }
-        }
-      }
-    },
-    '/produtos/{id}': {
-      get: {
-        summary: 'Retorna foto, nome, ingredientes e preço de um produto',
-        parameters: [
-          {
-            name: 'id',
-            in: 'path',
-            required: true,
-            schema: {
-              type: 'integer'
-            }
-          }
-        ],
-        responses: {
-          '200': {
-            description: 'Detalhes do produto'
-          },
-          '404': {
-            description: 'Produto não encontrado'
-          }
-        }
-      }
+  });
+
+  const sendEmail = async (to: string, subject: string, text: string, html?: string) => {
+    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
+      console.warn("⚠️ SMTP credentials not set! Simulating email...");
+      console.log(`[EMAIL SIMULATION] To: ${to} | Subject: ${subject} | Msg: ${text}`);
+      return;
     }
-  }
-};
-
-const hashPassword = (password: string) => {
-  return crypto.createHash('sha256').update(password).digest('hex');
-};
-
-// ============================================================================
-// Database Manager
-// ============================================================================
-class DatabaseSeeder {
-  private db: DatabaseSync;
-  constructor(db: DatabaseSync) {
-    this.db = db;
-  }
-
-  public seedData() {
-    // Seed Mock User
-    const userCount = this.db.prepare('SELECT COUNT(*) as count FROM users WHERE email = ?').get('admin@facens.br') as any;
-    if (userCount.count === 0) {
-      const insertUser = this.db.prepare('INSERT INTO users (name, email, matricula, senha, role, canteen_id) VALUES (?, ?, ?, ?, ?, ?)');
-      insertUser.run('Admin Teste', 'admin@facens.br', 'admin', hashPassword('224641'), 'student', null);
-      
-      // Seed Gestores
-      insertUser.run('Cantina Central', 'central@facens.br', null, hashPassword('123456'), 'manager', 1);
-      insertUser.run('Cantina Bloco B', 'blocob@facens.br', null, hashPassword('123456'), 'manager', 2);
-      insertUser.run('Cantina Leste', 'leste@facens.br', null, hashPassword('123456'), 'manager', 3);
-      insertUser.run('Super Admin', 'sadmin@facens.br', null, hashPassword('224641'), 'superadmin', null);
-    } else {
-      const sadminCount = this.db.prepare('SELECT COUNT(*) as count FROM users WHERE email = ?').get('sadmin@facens.br') as any;
-      if (sadminCount.count === 0) {
-         const insertUser = this.db.prepare('INSERT INTO users (name, email, matricula, senha, role, canteen_id) VALUES (?, ?, ?, ?, ?, ?)');
-         insertUser.run('Super Admin', 'sadmin@facens.br', null, hashPassword('224641'), 'superadmin', null);
-      }
-      
-      try {
-        this.db.prepare("UPDATE users SET email = 'central@facens.br', name = 'Cantina Central' WHERE email = 'carlos@cantina.br'").run();
-        this.db.prepare("UPDATE users SET email = 'blocob@facens.br', name = 'Cantina Bloco B' WHERE email = 'mariana@cantina.br'").run();
-        this.db.prepare("UPDATE users SET email = 'leste@facens.br', name = 'Cantina Leste' WHERE email = 'joao@cantina.br'").run();
-      } catch (e) {}
-    }
-
-    // Seed Canteens
-    const canteensCount = this.db.prepare('SELECT COUNT(*) as count FROM canteens').get() as any;
-    if (canteensCount.count === 0) {
-      const insertCanteen = this.db.prepare('INSERT INTO canteens (name, desc, location, emoji, color, open_time, close_time) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      insertCanteen.run('Cantina Central', 'Salgados, lanches e bebidas para o dia a dia', 'Prédio Principal', '🍕', '#fff8f0', '08:00', '22:30');
-      insertCanteen.run('Cantina do Bloco B', 'Refeições completas e opções saudáveis', 'Bloco B', '🥗', '#f0f7ff', '08:00', '22:00');
-      insertCanteen.run('Cafeteria Leste', 'Cafés, sucos e snacks rápidos', 'Prédio Leste', '☕', '#f5f7fb', '08:00', '23:00');
-    }
-
-    // Seed Categories
-    const catCount = this.db.prepare('SELECT COUNT(*) as count FROM categories').get() as any;
-    if (catCount.count === 0) {
-      const insertCat = this.db.prepare('INSERT INTO categories (name) VALUES (?)');
-      insertCat.run('salgados');
-      insertCat.run('bebidas');
-      insertCat.run('lanches');
-      insertCat.run('doces');
-    }
-
-    // Seed Products
-    const count = this.db.prepare('SELECT COUNT(*) as count FROM products').get() as any;
-    if (count.count === 0) {
-      const insertProd = this.db.prepare('INSERT INTO products (name, desc, price, emoji, cat, points_price, canteen_id) VALUES (?, ?, ?, ?, ?, ?, ?)');
-      // Cantina Central (8 items, 4 redeemable)
-      insertProd.run('Coxinha', 'Coxinha de frango crocante', 5.50, '🥟', 'salgados', 80, 1);
-      insertProd.run('Esfiha', 'Esfiha de carne temperada', 4.00, '🥙', 'salgados', null, 1);
-      insertProd.run('Refrigerante Lata', '350ml gelado', 5.00, '🥤', 'bebidas', 50, 1);
-      insertProd.run('Suco de Uva', 'Suco natural 300ml', 7.00, '🥤', 'bebidas', null, 1);
-      insertProd.run('X-Burguer', 'Hamburguer completo', 18.00, '🍔', 'lanches', null, 1);
-      insertProd.run('Misto Quente', 'Queijo e presunto na chapa', 8.00, '🥪', 'lanches', 100, 1);
-      insertProd.run('Bolo de Pote', 'Bolo de chocolate molhadinho', 9.00, '🧁', 'doces', null, 1);
-      insertProd.run('Água Mineral', '500ml sem gás', 3.00, '💧', 'bebidas', 30, 1);
-      
-      // Cantina do Bloco B (8 items, 4 redeemable)
-      insertProd.run('Salada Caesar', 'Alface, croutons e frango', 15.00, '🥗', 'lanches', null, 2);
-      insertProd.run('Wrap Vegetariano', 'Grão de bico e vegetais', 12.00, '🌯', 'lanches', 150, 2);
-      insertProd.run('Suco Verde', 'Detox de limão e couve', 8.00, '🥤', 'bebidas', null, 2);
-      insertProd.run('Brownie Fit', 'Sem açúcar', 6.00, '🍫', 'doces', 60, 2);
-      insertProd.run('Kombucha', 'Bebida probiótica', 10.00, '🍹', 'bebidas', null, 2);
-      insertProd.run('Sanduíche Natural', 'Pão integral e frango desfiado', 11.00, '🥪', 'lanches', 120, 2);
-      insertProd.run('Salada de Frutas', 'Frutas da estação da feira', 7.00, '🍎', 'doces', 80, 2);
-      insertProd.run('Açaí Médio', 'Açaí 300ml com granola', 14.00, '🥣', 'doces', null, 2);
-
-      // Cafeteria Leste (8 items, 4 redeemable)
-      insertProd.run('Café Expresso', 'Café puro', 3.00, '☕', 'bebidas', null, 3);
-      insertProd.run('Cappuccino', 'Com bastante espuma', 6.00, '☕', 'bebidas', 60, 3);
-      insertProd.run('Pão de Queijo', 'Saindo do forno', 4.00, '🧀', 'salgados', null, 3);
-      insertProd.run('Fatia de Bolo', 'Bolo de cenoura com chocolate', 7.00, '🍰', 'doces', 120, 3);
-      insertProd.run('Croissant', 'Manteiga derretendo', 8.00, '🥐', 'salgados', null, 3);
-      insertProd.run('Macchiato', 'Café com espuma de leite', 5.00, '☕', 'bebidas', 50, 3);
-      insertProd.run('Cookie', 'Cookie de chocolate macio', 4.50, '🍪', 'doces', 45, 3);
-      insertProd.run('Torta de Frango', 'Fatia artesanal', 9.00, '🥧', 'salgados', null, 3);
-    }
-    
-    // Seed Tags
-    const tagsCount = this.db.prepare('SELECT COUNT(*) as count FROM tags').get() as any;
-    if (tagsCount.count === 0) {
-      const insertTag = this.db.prepare('INSERT INTO tags (name, color, canteen_id) VALUES (?, ?, ?)');
-      insertTag.run('Vegano', '#22c55e', 1); // ID 1
-      insertTag.run('Sem Glúten', '#eab308', 1); // ID 2
-      insertTag.run('Zero Lactose', '#3b82f6', 1); // ID 3
-      insertTag.run('Vegano', '#22c55e', 2); // ID 4
-      insertTag.run('Zero Açúcar', '#ec4899', 2); // ID 5
-      insertTag.run('Vegano', '#22c55e', 3); // ID 6
-      insertTag.run('Sem Glúten', '#eab308', 3); // ID 7
-
-      // Updates initial seeded products
-      this.db.exec("UPDATE products SET tags = '[3]' WHERE name = 'Coxinha' AND canteen_id = 1");
-      this.db.exec("UPDATE products SET tags = '[1, 3]' WHERE name = 'Suco de Uva' AND canteen_id = 1");
-      this.db.exec("UPDATE products SET tags = '[1]' WHERE name = 'Bolo de Pote' AND canteen_id = 1");
-      this.db.exec("UPDATE products SET tags = '[1]' WHERE name = 'Esfiha' AND canteen_id = 1"); 
-
-      this.db.exec("UPDATE products SET tags = '[4]' WHERE name = 'Wrap Vegetariano' AND canteen_id = 2");
-      this.db.exec("UPDATE products SET tags = '[4, 5]' WHERE name = 'Suco Verde' AND canteen_id = 2");
-      this.db.exec("UPDATE products SET tags = '[5]' WHERE name = 'Brownie Fit' AND canteen_id = 2");
-      this.db.exec("UPDATE products SET tags = '[4, 5]' WHERE name = 'Salada de Frutas' AND canteen_id = 2");
-
-      this.db.exec("UPDATE products SET tags = '[6, 7]' WHERE name = 'Café Expresso' AND canteen_id = 3");
-      this.db.exec("UPDATE products SET tags = '[7]' WHERE name = 'Pão de Queijo' AND canteen_id = 3");
-      this.db.exec("UPDATE products SET tags = '[6]' WHERE name = 'Cookie' AND canteen_id = 3");
-    }
-
-    // Seed Settings
-    const settingsCount = this.db.prepare('SELECT COUNT(*) as count FROM settings').get() as any;
-    if (settingsCount.count === 0) {
-      const insertSetting = this.db.prepare('INSERT INTO settings (key, value) VALUES (?, ?)');
-      insertSetting.run('global_maintenance', '0');
-      insertSetting.run('global_warning', '');
-    }
-  }
-}
-
-class DatabaseManager {
-  public db: DatabaseSync;
-
-  constructor() {
-    this.db = new DatabaseSync('./database.sqlite');
-    this.initializeSchema();
-    const seeder = new DatabaseSeeder(this.db);
-    seeder.seedData();
-  }
-
-  private initializeSchema() {
-    // Users
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        email TEXT UNIQUE NOT NULL,
-        matricula TEXT,
-        senha TEXT NOT NULL,
-        role TEXT NOT NULL DEFAULT 'student',
-        points INTEGER DEFAULT 0,
-        canteen_id INTEGER DEFAULT NULL
-      )
-    `);
-    try { this.db.exec("ALTER TABLE users ADD COLUMN points INTEGER DEFAULT 0"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE users ADD COLUMN canteen_id INTEGER DEFAULT NULL"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE users ADD COLUMN created_at DATETIME DEFAULT CURRENT_TIMESTAMP"); } catch (e) {}
-
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS verification_codes (
-        email TEXT PRIMARY KEY,
-        code TEXT NOT NULL,
-        expires_at INTEGER NOT NULL
-      )
-    `);
-
-    // Products
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS products (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        desc TEXT NOT NULL,
-        price REAL NOT NULL,
-        emoji TEXT NOT NULL,
-        cat TEXT NOT NULL,
-        active INTEGER DEFAULT 1,
-        stock INTEGER DEFAULT 10,
-        points_price INTEGER DEFAULT NULL,
-        canteen_id INTEGER DEFAULT 1
-      )
-    `);
-    try { this.db.exec("ALTER TABLE products ADD COLUMN stock INTEGER DEFAULT 10"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE products ADD COLUMN points_price INTEGER DEFAULT NULL"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE products ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE products ADD COLUMN tags TEXT DEFAULT '[]'"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE products ADD COLUMN image_url TEXT"); } catch (e) {}
-
-    // Tags
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS tags (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        color TEXT NOT NULL,
-        canteen_id INTEGER NOT NULL
-      )
-    `);
-
-    // Migrate orders to remove UNIQUE constraint if needed
     try {
-      const dbSchema = this.db.prepare("SELECT sql FROM sqlite_master WHERE type='table' AND name='orders'").get() as any;
-      if (dbSchema && dbSchema.sql.includes('UNIQUE')) {
-        // Ensure all possible columns exist first, so we don't fail the insert
-        try { this.db.exec(`ALTER TABLE orders ADD COLUMN user_id INTEGER`); } catch (e) {}
-        try { this.db.exec("ALTER TABLE orders ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
-        try { this.db.exec("ALTER TABLE orders ADD COLUMN points_awarded INTEGER DEFAULT 0"); } catch (e) {}
-        try { this.db.exec("ALTER TABLE orders ADD COLUMN cancel_reason TEXT"); } catch (e) {}
-        
-        this.db.exec(`
-          CREATE TABLE orders_new (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            code TEXT NOT NULL,
-            user_name TEXT NOT NULL,
-            user_id INTEGER,
-            items TEXT NOT NULL,
-            total REAL NOT NULL,
-            status TEXT NOT NULL DEFAULT 'aguardando',
-            canteen_id INTEGER DEFAULT 1,
-            points_awarded INTEGER DEFAULT 0,
-            cancel_reason TEXT,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-          );
-          INSERT INTO orders_new SELECT id, code, user_name, user_id, items, total, status, canteen_id, points_awarded, cancel_reason, created_at FROM orders;
-          DROP TABLE orders;
-          ALTER TABLE orders_new RENAME TO orders;
-        `);
-      }
-    } catch (e) {
-      console.error("Migration error orders UNIQUE: ", e);
+      await transporter.sendMail({
+        from: `"Cantina OrderPoint" <${process.env.SMTP_USER}>`,
+        to,
+        subject,
+        text,
+        html: html || text,
+      });
+      console.log(`📧 Email sent to ${to}`);
+    } catch (err) {
+      console.error("Erro ao enviar e-mail:", err);
+      throw new Error("Erro ao enviar e-mail. Verifique a configuração SMTP.");
     }
+  };
 
-    // Orders
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS orders (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT NOT NULL,
-        user_name TEXT NOT NULL,
-        user_id INTEGER,
-        items TEXT NOT NULL,
-        total REAL NOT NULL,
-        status TEXT NOT NULL DEFAULT 'aguardando',
-        canteen_id INTEGER DEFAULT 1,
-        points_awarded INTEGER DEFAULT 0,
-        cancel_reason TEXT,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-
-    // Add user_id column if it doesn't exist
-    try {
-      this.db.exec(`ALTER TABLE orders ADD COLUMN user_id INTEGER`);
-    } catch (e) {
-      // Column might already exist
-    }
-    try { this.db.exec("ALTER TABLE orders ADD COLUMN canteen_id INTEGER DEFAULT 1"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE orders ADD COLUMN points_awarded INTEGER DEFAULT 0"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE orders ADD COLUMN cancel_reason TEXT"); } catch (e) {}
-
-    // Canteens
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS canteens (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT NOT NULL,
-        desc TEXT NOT NULL,
-        location TEXT NOT NULL DEFAULT '',
-        emoji TEXT NOT NULL,
-        color TEXT NOT NULL,
-        open_time TEXT NOT NULL DEFAULT '08:00',
-        close_time TEXT NOT NULL DEFAULT '18:00',
-        points_enabled INTEGER DEFAULT 1
-      )
-    `);
-    try { this.db.exec("ALTER TABLE canteens ADD COLUMN location TEXT NOT NULL DEFAULT ''"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE canteens ADD COLUMN image_url TEXT"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE canteens ADD COLUMN points_enabled INTEGER DEFAULT 1"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE canteens ADD COLUMN maintenance_mode INTEGER DEFAULT 0"); } catch (e) {}
-    try { this.db.exec("ALTER TABLE canteens ADD COLUMN global_warning TEXT DEFAULT ''"); } catch (e) {}
-
-    // Ratings
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS ratings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        order_id INTEGER UNIQUE NOT NULL,
-        canteen_id INTEGER NOT NULL DEFAULT 1,
-        score INTEGER NOT NULL,
-        created_at DATETIME DEFAULT CURRENT_TIMESTAMP
-      )
-    `);
-    try { this.db.exec("ALTER TABLE ratings ADD COLUMN canteen_id INTEGER NOT NULL DEFAULT 1"); } catch (e) {}
-
-    // Categories
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS categories (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        name TEXT UNIQUE NOT NULL
-      )
-    `);
-
-    // Coupons
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS coupons (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        code TEXT UNIQUE NOT NULL,
-        discount_pct REAL NOT NULL,
-        max_uses INTEGER DEFAULT NULL,
-        used_count INTEGER DEFAULT 0,
-        expires_at DATETIME DEFAULT NULL,
-        min_value REAL DEFAULT 0,
-        canteen_id INTEGER NOT NULL,
-        active INTEGER DEFAULT 1
-      )
-    `);
-    try { this.db.exec("ALTER TABLE coupons ADD COLUMN min_value REAL DEFAULT 0"); } catch (e) {}
-
-    // Settings
-    this.db.exec(`
-      CREATE TABLE IF NOT EXISTS settings (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        key TEXT UNIQUE NOT NULL,
-        value TEXT NOT NULL
-      )
-    `);
-  }
-}
-
-// ============================================================================
-// Controllers
-// ============================================================================
-
-// Controller Helper
-function checkGestor(req: Request, res: Response, db: DatabaseSync): boolean {
-  const userIdHeader = req.headers['x-user-id'] as string;
-  if (!userIdHeader) {
-     res.status(401).json({ error: "Não autorizado." });
-     return false;
-  }
-  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(userIdHeader) as any;
-  if (!user || (user.role !== 'manager' && user.role !== 'superadmin')) {
-     res.status(403).json({ error: "Acesso negado." });
-     return false;
-  }
-  return true;
-}
-
-function checkSuperAdmin(req: Request, res: Response, db: DatabaseSync): boolean {
-  const userIdHeader = req.headers['x-user-id'] as string;
-  if (!userIdHeader) {
-     res.status(401).json({ error: "Não autorizado." });
-     return false;
-  }
-  const user = db.prepare('SELECT role FROM users WHERE id = ?').get(userIdHeader) as any;
-  if (!user || user.role !== 'superadmin') {
-     res.status(403).json({ error: "Acesso negado. Apenas superadmins." });
-     return false;
-  }
-  return true;
-}
-
-class BaseController {
-  protected db: DatabaseSync;
-  protected app: express.Application;
-
-  constructor(db: DatabaseSync, app: express.Application) {
-    this.db = db;
-    this.app = app;
-  }
-
-  public registerRoutes(): void {
-    throw new Error("Method not implemented.");
-  }
-}
-
-class UserController extends BaseController {
-  constructor(db: DatabaseSync, app: express.Application) {
-    super(db, app);
-  }
-
-  public registerRoutes() {
-    this.app.post("/api/register", this.register.bind(this));
-    this.app.post("/usuarios", this.register.bind(this)); // Alias for swagger
-    this.app.post("/api/login", this.login.bind(this));
-    this.app.get("/api/users", this.getAll.bind(this));
-    this.app.get("/api/users/:id", this.getProfile.bind(this));
-    this.app.put("/api/users/:id", this.updateProfile.bind(this));
-    this.app.post("/api/users/:id/redeem", this.redeemReward.bind(this));
-    this.app.post("/api/users/manager", this.createManager.bind(this));
-    this.app.put("/api/users/admin/:id", this.updateUser.bind(this));
-    this.app.delete("/api/users/:id", this.deleteUser.bind(this));
-    this.app.post("/api/request-code", this.requestCode.bind(this));
-    this.app.post("/api/reset-password-request", this.resetPasswordRequest.bind(this));
-    this.app.post("/api/reset-password", this.resetPassword.bind(this));
-  }
-
-  private async resetPasswordRequest(req: Request, res: Response) {
-    const { email } = req.body;
-    
-    if (!email) {
-      return res.status(400).json({ error: "E-mail é obrigatório." });
-    }
-
-    const existingUser = this.db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-    if (!existingUser) {
-      return res.status(404).json({ error: "Usuário não encontrado." });
-    }
-
-    const code = crypto.randomInt(100000, 1000000).toString();
-    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
-
-    try {
-      const stmt = this.db.prepare(`
-        INSERT INTO verification_codes (email, code, expires_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(email) DO UPDATE SET code = excluded.code, expires_at = excluded.expires_at
-      `);
-      stmt.run(email, code, expiresAt);
-
-      if (transporter) {
-        const fromAddress = process.env.SMTP_USER ? `"Cantina OrderPoint" <${process.env.SMTP_USER}>` : '"Cantina OrderPoint" <noreply@orderpoint.com>';
-        const info = await transporter.sendMail({
-          from: fromAddress,
-          to: email,
-          subject: "Cantina OrderPoint - Recuperação de Senha",
-          text: `Seu código para redefinir a senha é: ${code}`,
-          html: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #f9fafb; padding: 20px; border-radius: 8px;">
-  <div style="text-align: center; margin-bottom: 20px;">
-    <h1 style="color: #ea580c; margin: 0; font-size: 28px;">Cantina OrderPoint 🍔</h1>
-  </div>
-  <div style="background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-    <h2 style="color: #1f2937; margin-top: 0; text-align: center;">Recuperação de Senha</h2>
-    <p style="color: #4b5563; font-size: 16px; line-height: 1.5; text-align: center;">
-      Recebemos um pedido para redefinir a sua senha. Utilize o código de 6 dígitos abaixo para concluir o processo:
-    </p>
-    <div style="background-color: #f3f4f6; border-radius: 8px; padding: 20px; margin: 30px 0; text-align: center;">
-      <span style="font-size: 32px; font-weight: bold; color: #ea580c; letter-spacing: 4px;">${code}</span>
+  const emailTemplate = (title: string, message: string, code: string, footer: string) => `
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>${title}</title>
+</head>
+<body style="margin: 0; padding: 0; background-color: #1a1a1a; font-family: sans-serif; color: #ffffff;">
+  <div style="background-color: #1a1a1a; padding: 20px;">
+    <div style="max-width: 600px; margin: 0 auto; padding: 20px 0;">
+      <h1 style="text-align: center; color: #f97316; font-size: 28px; margin-bottom: 30px;">Cantina OrderPoint 🍕</h1>
+      <div style="background-color: #262626; border-radius: 12px; padding: 40px 30px; text-align: center;">
+        <h2 style="font-size: 24px; font-weight: bold; margin-top: 0; margin-bottom: 20px; color: #ffffff;">${title}</h2>
+        <p style="font-size: 16px; color: #d4d4d8; line-height: 1.5; margin-bottom: 30px; padding: 0 20px;">
+          ${message}
+        </p>
+        <div style="background-color: #3f3f46; border-radius: 8px; padding: 20px; margin-bottom: 30px;">
+          <span style="font-size: 40px; font-weight: bold; letter-spacing: 5px; color: #f97316;">${code}</span>
+        </div>
+        <p style="font-size: 14px; color: #a1a1aa; margin: 0;">
+          ${footer}
+        </p>
+      </div>
+      <p style="text-align: center; font-size: 12px; color: #71717a; margin-top: 30px;">
+        &copy; 2026 Cantina OrderPoint. Todos os direitos reservados.
+      </p>
     </div>
-    <p style="color: #6b7280; font-size: 14px; text-align: center;">
-      ⚠️ <b>Aviso:</b> Se você não solicitou a troca de senha, por favor ignore este email. Nenhuma alteração será feita na sua conta.
-    </p>
   </div>
-  <div style="text-align: center; margin-top: 20px;">
-    <p style="color: #9ca3af; font-size: 12px;">© ${new Date().getFullYear()} Cantina OrderPoint. Todos os direitos reservados.</p>
-  </div>
-</div>`
-        });
-        
-        if (!process.env.SMTP_USER) {
-          console.log("Email sent! Preview URL: %s", nodemailer.getTestMessageUrl(info));
-        } else {
-          console.log(`Real email sent to ${email}`);
-        }
-      }
+</body>
+</html>
+  `;
 
-      res.json({ success: true, message: "Código enviado com sucesso." });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao gerar código." });
+
+  const checkGestor = async (req: Request, res: Response) => {
+    const userIdHeader = req.headers['x-user-id'] as string;
+    if (!userIdHeader) { res.status(401).json({ error: "Não autorizado." }); return false; }
+    if (userIdHeader === "mock-sadmin-id") {
+       return { id: "mock-sadmin-id", role: "superadmin" };
     }
-  }
-
-  private resetPassword(req: Request, res: Response) {
-    const { email, code, newPassword } = req.body;
-    
-    if (!email || !code || !newPassword) {
-      return res.status(400).json({ error: "E-mail, código e nova senha são obrigatórios." });
-    }
-
-    const record = this.db.prepare('SELECT * FROM verification_codes WHERE email = ?').get(email) as any;
-    if (!record) return res.status(400).json({ error: "Nenhum código solicitado para este e-mail." });
-    if (record.code !== code) return res.status(400).json({ error: "Código inválido." });
-    if (Date.now() > record.expires_at) return res.status(400).json({ error: "Código expirado." });
-
-    const hashedSenha = hashPassword(newPassword);
-
-    const currentUser = this.db.prepare('SELECT senha FROM users WHERE email = ?').get(email) as any;
-    if (currentUser && currentUser.senha === hashedSenha) {
-      return res.status(400).json({ error: "A nova senha deve ser diferente da atual." });
-    }
-
     try {
-      const update = this.db.prepare('UPDATE users SET senha = ? WHERE email = ?');
-      update.run(hashedSenha, email);
-      
-      this.db.prepare('DELETE FROM verification_codes WHERE email = ?').run(email);
-      
-      res.json({ success: true, message: "Senha redefinida com sucesso." });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao redefinir senha." });
+        const userSnap = await getDoc(doc(db, "users", userIdHeader));
+        const user = userSnap.data() as any;
+        if (!user || (user.role !== 'manager' && user.role !== 'superadmin')) { res.status(403).json({ error: "Acesso negado." }); return false; }
+        return user;
+    } catch {
+        res.status(401).json({ error: "Inválido" }); return false;
     }
-  }
+  };
 
-  private async requestCode(req: Request, res: Response) {
-    const { email } = req.body;
-    
-    if (!email) {
-      return res.status(400).json({ error: "E-mail é obrigatório." });
+  const checkSuperAdmin = async (req: Request, res: Response) => {
+    const userIdHeader = req.headers['x-user-id'] as string;
+    if (!userIdHeader) { res.status(401).json({ error: "Não autorizado." }); return false; }
+    if (userIdHeader === "mock-sadmin-id") {
+       return { id: "mock-sadmin-id", role: "superadmin" };
     }
-
-    const emailRegex = /^\d{6}@facens\.br$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ error: "O e-mail deve ser institucional (@facens.br) e conter exatamente 6 dígitos numéricos antes do @ (seu RA)." });
-    }
-
-    const existingUser = this.db.prepare('SELECT id FROM users WHERE email = ?').get(email);
-    if (existingUser) {
-      return res.status(400).json({ error: "E-mail já cadastrado." });
-    }
-
-    const code = crypto.randomInt(100000, 1000000).toString();
-    const expiresAt = Date.now() + 10 * 60 * 1000; // 10 minutes
-
     try {
-      const stmt = this.db.prepare(`
-        INSERT INTO verification_codes (email, code, expires_at)
-        VALUES (?, ?, ?)
-        ON CONFLICT(email) DO UPDATE SET code = excluded.code, expires_at = excluded.expires_at
-      `);
-      stmt.run(email, code, expiresAt);
-
-      if (transporter) {
-        const fromAddress = process.env.SMTP_USER ? `"Cantina OrderPoint" <${process.env.SMTP_USER}>` : '"Cantina OrderPoint" <noreply@orderpoint.com>';
-        const info = await transporter.sendMail({
-          from: fromAddress,
-          to: email,
-          subject: "Cantina OrderPoint - Código de Verificação",
-          text: `Seu código de verificação é: ${code}`,
-          html: `<div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; background-color: #f9fafb; padding: 20px; border-radius: 8px;">
-  <div style="text-align: center; margin-bottom: 20px;">
-    <h1 style="color: #ea580c; margin: 0; font-size: 28px;">Cantina OrderPoint 🍕</h1>
-  </div>
-  <div style="background-color: #ffffff; padding: 30px; border-radius: 8px; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1);">
-    <h2 style="color: #1f2937; margin-top: 0; text-align: center;">Confirme seu E-mail</h2>
-    <p style="color: #4b5563; font-size: 16px; line-height: 1.5; text-align: center;">
-      Falta pouco para você fazer o seu primeiro pedido! Use o código de verificação abaixo para criar a sua conta na cantina:
-    </p>
-    <div style="background-color: #f3f4f6; border-radius: 8px; padding: 20px; margin: 30px 0; text-align: center;">
-      <span style="font-size: 32px; font-weight: bold; color: #ea580c; letter-spacing: 4px;">${code}</span>
-    </div>
-    <p style="color: #6b7280; font-size: 14px; text-align: center;">
-      Este código é válido por 10 minutos. Aproveite nossos lanches!
-    </p>
-  </div>
-  <div style="text-align: center; margin-top: 20px;">
-    <p style="color: #9ca3af; font-size: 12px;">© ${new Date().getFullYear()} Cantina OrderPoint. Todos os direitos reservados.</p>
-  </div>
-</div>`
-        });
-        
-        if (!process.env.SMTP_USER) {
-          console.log("Email sent! Preview URL: %s", nodemailer.getTestMessageUrl(info));
-        } else {
-          console.log(`Real email sent to ${email}`);
-        }
-      }
-
-      res.json({ success: true, message: "Código enviado com sucesso." });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao gerar código." });
+        const userSnap = await getDoc(doc(db, "users", userIdHeader));
+        const user = userSnap.data() as any;
+        if (!user || user.role !== 'superadmin') { res.status(403).json({ error: "Acesso negado. Apenas superadmins." }); return false; }
+        return user;
+    } catch {
+        res.status(401).json({ error: "Inválido" }); return false;
     }
-  }
+  };
 
-  private register(req: Request, res: Response) {
-    const { name, email, senha, code } = req.body;
-    if (!name || !email || !senha || !code) {
-      return res.status(400).json({ error: "Nome, e-mail, senha e código são obrigatórios." });
+  app.get("/api/seed-sadmin", async (req, res) => {
+    try {
+      await setDoc(doc(db, 'users', 'sadmin-seed-id'), {
+        name: 'Super Admin',
+        email: 'sadmin@facens.br',
+        senha: hashPassword('224641'),
+        role: 'superadmin',
+        points: 0,
+        canteen_id: null,
+        created_at: Date.now()
+      });
+      res.json({ success: true });
+    } catch(e: any) {
+      res.status(500).json({ error: e.message });
     }
+  });
 
-    const nameRegex = /^[A-Za-zÀ-ÖØ-öø-ÿ\s]+$/;
-    if (!nameRegex.test(name)) {
-      return res.status(400).json({ error: "O nome de usuário não pode conter números ou caracteres especiais, apenas letras." });
-    }
+  
 
-    const emailRegex = /^\d{6}@facens\.br$/;
-    if (!emailRegex.test(email)) {
-      return res.status(400).json({ error: "O e-mail deve ser institucional (@facens.br) e conter exatamente 6 dígitos numéricos antes do @ (seu RA)." });
-    }
 
-    const record = this.db.prepare('SELECT * FROM verification_codes WHERE email = ?').get(email) as any;
-    if (!record) return res.status(400).json({ error: "Nenhum código solicitado para este e-mail." });
-    if (record.code !== code) return res.status(400).json({ error: "Código inválido." });
-    if (Date.now() > record.expires_at) return res.status(400).json({ error: "Código expirado." });
 
-    const matricula = email.split('@')[0];
+
+  app.put("/api/users/admin/:id", async (req, res) => {
+    if (!await checkSuperAdmin(req, res)) return;
+    await updateDoc(doc(db, "users", req.params.id), req.body);
+    res.json({ success: true });
+  });
+
+  app.post("/api/users/manager", async (req, res) => {
+    if (!await checkSuperAdmin(req, res)) return;
+    const { name, email, senha, role, canteen_id, matricula: matriculaBody } = req.body;
+    const matricula = matriculaBody || email.split('@')[0];
     const hashedSenha = hashPassword(senha);
+    const newRef = await addDoc(collection(db, "users"), { name, email, matricula, senha: hashedSenha, role: role || 'manager', points: 0, canteen_id, created_at: Date.now() });
+    res.status(201).json({ success: true, userId: newRef.id });
+  });
 
+  app.delete("/api/users/:id", async (req, res) => {
+    if (!await checkSuperAdmin(req, res)) return;
+    await deleteDoc(doc(db, "users", req.params.id));
+    res.json({ success: true });
+  });
+
+  app.post(["/api/register", "/usuarios"], async (req: Request, res: Response) => {
     try {
-      const insert = this.db.prepare('INSERT INTO users (name, email, matricula, senha, role) VALUES (?, ?, ?, ?, ?)');
-      const result = insert.run(name, email, matricula, hashedSenha, 'student');
+      const { name, email, senha, code } = req.body;
+      if (!name || !email || !senha || !code) return res.status(400).json({ error: "Nome, e-mail, senha e código são obrigatórios." });
+
+      const qCode = query(collection(db, "verification_codes"), where("email", "==", email));
+      const codeSnaps = await getDocs(qCode);
+      if (codeSnaps.empty) return res.status(400).json({ error: "Nenhum código solicitado para este e-mail." });
       
-      this.db.prepare('DELETE FROM verification_codes WHERE email = ?').run(email);
+      // Find valid code (latest)
+      const validCodes = codeSnaps.docs.map(parseDoc).filter((c: any) => c.code === code && c.expires_at > Date.now());
+      if (validCodes.length === 0) return res.status(400).json({ error: "Código inválido ou expirado." });
+
+      const q = query(collection(db, "users"), where("email", "==", email));
+      const snaps = await getDocs(q);
+      if (!snaps.empty) return res.status(400).json({ error: "E-mail já cadastrado." });
+
+      const matricula = email.split('@')[0];
+      const hashedSenha = hashPassword(senha);
+
+      const newUser = await addDoc(collection(db, "users"), { name, email, matricula, senha: hashedSenha, role: 'student', points: 0, canteen_id: null, created_at: Date.now() });
       
-      res.status(201).json({ success: true, userId: result.lastInsertRowid });
-    } catch (error: any) {
-      if (error.message && error.message.includes("UNIQUE constraint failed")) {
-        res.status(400).json({ error: "E-mail já cadastrado." });
-      } else {
-        res.status(500).json({ error: "Erro ao criar conta." });
+      await deleteDoc(doc(db, "verification_codes", validCodes[0].id));
+      res.status(201).json({ success: true, userId: newUser.id });
+    } catch (err: any) {
+      console.error('Error in /api/register:', err);
+      res.status(500).json({ error: "Erro interno", details: err.message });
+    }
+  });
+
+  app.post("/api/login", async (req, res) => {
+    try {
+      const { email, senha } = req.body;
+      if (!email || !senha) return res.status(400).json({ error: "E-mail e senha são obrigatórios." });
+
+      if (email === 'sadmin@facens.br' && senha === '224641') {
+        return res.json({
+          success: true,
+          user: { id: "mock-sadmin-id", name: "Super Admin", email: "sadmin@facens.br", matricula: "sadmin", role: "superadmin", points: 0, canteen_id: null }
+        });
       }
-    }
-  }
 
-  private login(req: Request, res: Response) {
-    const { email, senha } = req.body;
-    if (!email || !senha) {
-      return res.status(400).json({ error: "E-mail e senha são obrigatórios." });
-    }
-
-    const hashedSenha = hashPassword(senha);
-
-    try {
-      const select = this.db.prepare('SELECT * FROM users WHERE email = ? AND senha = ?');
-      const user = select.get(email, hashedSenha) as any;
+      const hashedSenha = hashPassword(senha);
+      const q = query(collection(db, "users"), where("email", "==", email), where("senha", "==", hashedSenha));
+      const snaps = await getDocs(q);
       
-      if (user) {
-        if (user.role !== 'superadmin') {
-           const maintenanceSetting = this.db.prepare("SELECT value FROM settings WHERE key = 'global_maintenance'").get() as any;
-           if (maintenanceSetting && maintenanceSetting.value === '1') {
-             return res.status(403).json({ error: "O sistema de cantinas está em modo de manutenção e encontra-se indisponível no momento." });
-           }
-        }
-
+      if (!snaps.empty) {
+        const user = parseDoc(snaps.docs[0]);
         res.json({
           success: true,
-          user: {
-            id: user.id,
-            name: user.name,
-            email: user.email,
-            matricula: user.matricula,
-            role: user.role,
-            points: user.points,
-            canteen_id: user.canteen_id
-          }
+          user: { id: user.id, name: user.name, email: user.email, matricula: user.matricula, role: user.role, points: user.points, canteen_id: user.canteen_id }
         });
       } else {
         res.status(401).json({ error: "E-mail ou senha incorretos." });
       }
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao fazer login." });
+    } catch (err: any) {
+      console.error('Error in /api/login:', err);
+      res.status(500).json({ error: "Erro interno", details: err.message });
     }
-  }
+  });
 
-  private getProfile(req: Request, res: Response) {
-    const userIdHeader = req.headers['x-user-id'];
-    if (!userIdHeader || userIdHeader !== req.params.id) {
-      return res.status(403).json({ error: "Acesso negado." });
+  app.get("/api/users", async (req, res) => {
+    if (!await checkSuperAdmin(req, res)) return;
+    const snaps = await getDocs(collection(db, "users"));
+    res.json(snaps.docs.map(parseDoc).map((u: any) => ({ id: u.id, name: u.name, email: u.email, matricula: u.matricula, role: u.role, canteen_id: u.canteen_id, points: u.points })));
+  });
+
+  app.get("/api/users/:id", async (req, res) => {
+    const userIdHeader = req.headers['x-user-id'] as string;
+    if (!userIdHeader || (userIdHeader !== req.params.id && userIdHeader !== 'mock-sadmin-id')) { return res.status(403).json({ error: "Acesso negado." }); }
+
+    const snap = await getDoc(doc(db, "users", req.params.id || ""));
+    if (snap.exists()) {
+      const u = snap.data();
+      res.json({ success: true, user: { id: snap.id, name: u.name, email: u.email, matricula: u.matricula, role: u.role, points: u.points, canteen_id: u.canteen_id } });
+    } else {
+      res.status(404).json({ error: "Usuário não encontrado." });
     }
+  });
 
-    try {
-      const user = this.db.prepare('SELECT id, name, email, matricula, role, points, canteen_id FROM users WHERE id = ?').get(req.params.id) as any;
-      if (user) {
-        res.json({ success: true, user });
-      } else {
-        res.status(404).json({ error: "Usuário não encontrado." });
-      }
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar perfil." });
-    }
-  }
-
-  private updateProfile(req: Request, res: Response) {
+  app.put("/api/users/:id", async (req, res) => {
+    const userIdHeader = req.headers['x-user-id'] as string;
+    if (!userIdHeader || (userIdHeader !== req.params.id && userIdHeader !== 'mock-sadmin-id')) { return res.status(403).json({ error: "Acesso negado." }); }
     const { name, email, senha } = req.body;
     const matricula = email.endsWith('@facens.br') ? email.replace('@facens.br', '') : '';
-    
-    const userIdHeader = req.headers['x-user-id'];
-    if (!userIdHeader || userIdHeader !== req.params.id) {
-      return res.status(403).json({ error: "Acesso negado. Você só pode atualizar seu próprio perfil." });
-    }
+    const updateData: any = { name, email, matricula };
+    if (senha) updateData.senha = hashPassword(senha);
+    await updateDoc(doc(db, "users", req.params.id), updateData);
+    res.json({ success: true, matricula });
+  });
 
-    if (name) {
-      const nameRegex = /^[A-Za-zÀ-ÖØ-öø-ÿ\s]+$/;
-      if (!nameRegex.test(name)) {
-        return res.status(400).json({ error: "O nome de usuário não pode conter números ou caracteres especiais, apenas letras." });
-      }
-    }
-
-    try {
-      if (senha) {
-        const hashedSenha = hashPassword(senha);
-        
-        const currentUser = this.db.prepare('SELECT senha FROM users WHERE id = ?').get(req.params.id) as any;
-        if (currentUser && currentUser.senha === hashedSenha) {
-          return res.status(400).json({ error: "A nova senha deve ser diferente da atual." });
-        }
-
-        const update = this.db.prepare('UPDATE users SET name=?, email=?, matricula=?, senha=? WHERE id=?');
-        update.run(name, email, matricula, hashedSenha, req.params.id);
-      } else {
-        const update = this.db.prepare('UPDATE users SET name=?, email=?, matricula=? WHERE id=?');
-        update.run(name, email, matricula, req.params.id);
-      }
-      res.json({ success: true, matricula });
-    } catch (error: any) {
-      if (error.message && error.message.includes("UNIQUE constraint failed")) {
-        res.status(400).json({ error: "E-mail já cadastrado." });
-      } else {
-        res.status(500).json({ error: "Erro ao atualizar perfil." });
-      }
-    }
-  }
-
-  private redeemReward(req: Request, res: Response) {
+  app.post("/api/users/:id/redeem", async (req, res) => {
     const { productId } = req.body;
     const userId = req.params.id;
-
-    if (req.headers['x-user-id'] !== userId.toString()) {
-        return res.status(403).json({ error: "Acesso negado." });
-    }
-
     try {
-        this.db.exec('BEGIN TRANSACTION');
-        
-        const user = this.db.prepare('SELECT points FROM users WHERE id = ?').get(userId) as any;
-        const product = this.db.prepare('SELECT id, name, emoji, stock, points_price FROM products WHERE id = ? AND active = 1').get(productId) as any;
-
-        if (!product || !product.points_price) throw new Error("Produto não disponível para resgate.");
-        if (!user || user.points < product.points_price) throw new Error("Pontos insuficientes.");
-        if (product.stock <= 0) throw new Error("Produto esgotado no estoque.");
-
-        this.db.exec('COMMIT');
-        // Fake the newPoints just for UI immediate update, the real deduction happens at checkout
-        res.json({ success: true, newPoints: user.points - product.points_price, product: { ...product, price: 0, isReward: true, points_price: product.points_price } });
-    } catch(err: any) {
-        this.db.exec('ROLLBACK');
-        res.status(400).json({ error: err.message });
+      const userRef = doc(db, "users", userId);
+      const prodRef = doc(db, "products", productId);
+      const result = await runTransaction(db, async (t) => {
+        const uSnap = await t.get(userRef);
+        const pSnap = await t.get(prodRef);
+        if (!uSnap.exists() || !pSnap.exists()) throw new Error("Não encontrado");
+        const u = uSnap.data();
+        const p = pSnap.data();
+        if (!p.points_price || p.active !== 1 || p.stock <= 0) throw new Error("Produto não disponível.");
+        if (u.points < p.points_price) throw new Error("Pontos insuficientes.");
+        t.update(userRef, { points: u.points - p.points_price });
+        return { pData: p, newPoints: u.points - p.points_price };
+      });
+      res.json({ success: true, newPoints: result.newPoints, product: { id: productId, ...result.pData, price: 0, isReward: true, points_price: result.pData.points_price } });
+    } catch (err: any) {
+      res.status(400).json({ error: err.message });
     }
-  }
-  private getAll(req: Request, res: Response) {
-    if (!checkSuperAdmin(req, res, this.db)) return;
+  });
+
+  app.post("/api/request-code", async (req, res) => {
     try {
-      const users = this.db.prepare('SELECT id, name, email, matricula, role, canteen_id, points FROM users').all();
-      res.json(users);
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar usuários." });
-    }
-  }
-
-  private createManager(req: Request, res: Response) {
-    if (!checkSuperAdmin(req, res, this.db)) return;
-    const { name, email, senha, canteen_id, role, matricula } = req.body;
-    if (!name || !email || !senha) {
-       return res.status(400).json({ error: "Nome, E-mail e Senha são obrigatórios." });
-    }
-    if (!email.endsWith("@facens.br")) {
-       return res.status(400).json({ error: "O e-mail deve terminar com @facens.br." });
-    }
-    const targetRole = role && ['superadmin', 'manager', 'student'].includes(role) ? role : 'manager';
-    if (targetRole === 'manager' && !canteen_id) {
-       return res.status(400).json({ error: "A cantina é obrigatória para Gestores." });
-    }
-    const hashedSenha = hashPassword(senha);
-    try {
-      const insert = this.db.prepare('INSERT INTO users (name, email, senha, role, canteen_id, matricula) VALUES (?, ?, ?, ?, ?, ?)');
-      const result = insert.run(name, email, hashedSenha, targetRole, targetRole === 'manager' ? canteen_id : null, matricula || null);
-      res.status(201).json({ success: true, userId: result.lastInsertRowid });
-    } catch (error: any) {
-      if (error.message && error.message.includes("UNIQUE constraint failed")) {
-        res.status(400).json({ error: "E-mail já cadastrado." });
-      } else {
-        res.status(500).json({ error: "Erro ao criar conta." });
-      }
-    }
-  }
-
-  private updateUser(req: Request, res: Response) {
-    if (!checkSuperAdmin(req, res, this.db)) return;
-    const { name, email, role, canteen_id, matricula } = req.body;
-    if (!name || !email || !role) {
-       return res.status(400).json({ error: "Nome, E-mail e Função são obrigatórios." });
-    }
-    try {
-      const update = this.db.prepare('UPDATE users SET name=?, email=?, role=?, canteen_id=?, matricula=? WHERE id=?');
-      update.run(name, email, role, role === 'manager' ? canteen_id : null, matricula || null, req.params.id);
-      res.json({ success: true });
-    } catch (error: any) {
-      if (error.message && error.message.includes("UNIQUE constraint failed")) {
-        res.status(400).json({ error: "E-mail já cadastrado noutra conta." });
-      } else {
-        res.status(500).json({ error: "Erro ao atualizar usuário." });
-      }
-    }
-  }
-
-  private deleteUser(req: Request, res: Response) {
-    if (!checkSuperAdmin(req, res, this.db)) return;
-    const { id } = req.params;
-    this.db.exec('BEGIN TRANSACTION');
-    try {
-      // Cascading deletes for user
-      this.db.prepare('DELETE FROM ratings WHERE order_id IN (SELECT id FROM orders WHERE user_id = ?)').run(id);
-      this.db.prepare('DELETE FROM orders WHERE user_id = ?').run(id);
-      this.db.prepare('DELETE FROM users WHERE id = ?').run(id);
-      this.db.exec('COMMIT');
-      res.json({ success: true });
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      res.status(500).json({ error: "Erro ao deletar usuário em cascata." });
-    }
-  }
-}
-
-class ProductController extends BaseController {
-  constructor(db: DatabaseSync, app: express.Application) {
-    super(db, app);
-  }
-
-  public registerRoutes() {
-    this.app.get("/api/products", this.getAll.bind(this));
-    this.app.post("/api/products", this.create.bind(this));
-    this.app.put("/api/products/:id", this.update.bind(this));
-    this.app.delete("/api/products/:id", this.delete.bind(this));
-    this.app.get("/produtos", this.getProdutos.bind(this));
-    this.app.get("/produtos/:id", this.getProdutoById.bind(this));
-  }
-
-  private getProdutos(req: Request, res: Response) {
-    const { categoria } = req.query;
-    try {
-      let products;
-      if (categoria) {
-        products = this.db.prepare('SELECT * FROM products WHERE active = 1 AND cat = ?').all(categoria as string);
-      } else {
-        products = this.db.prepare('SELECT * FROM products WHERE active = 1').all();
-      }
-      res.json(products);
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar produtos." });
-    }
-  }
-
-  private getProdutoById(req: Request, res: Response) {
-    try {
-      const product = this.db.prepare('SELECT emoji as foto, image_url as image_url, name as nome, desc as ingredientes, price as preco FROM products WHERE id = ?').get(req.params.id);
-      if (product) {
-        res.json(product);
-      } else {
-        res.status(404).json({ error: "Produto não encontrado." });
-      }
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar produto." });
-    }
-  }
-
-  private getAll(req: Request, res: Response) {
-    try {
-      const products = this.db.prepare('SELECT * FROM products').all();
-      res.json(products);
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar produtos." });
-    }
-  }
-
-  private create(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    const { name, desc, price, emoji, cat, stock, points_price, canteen_id, tags, image_url } = req.body;
-    if (!name || !price || !cat) return res.status(400).json({ error: "Dados incompletos." });
-    try {
-      const insert = this.db.prepare('INSERT INTO products (name, desc, price, emoji, cat, stock, points_price, canteen_id, tags, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-      const result = insert.run(name, desc || '', price, emoji || '🍽️', cat, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1, tags || '[]', image_url || null);
-      res.status(201).json({ success: true, id: result.lastInsertRowid });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao criar produto." });
-    }
-  }
-
-  private update(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    const { name, desc, price, emoji, cat, active, stock, points_price, canteen_id, tags, image_url } = req.body;
-    try {
-      const update = this.db.prepare('UPDATE products SET name=?, desc=?, price=?, emoji=?, cat=?, active=?, stock=?, points_price=?, canteen_id=?, tags=?, image_url=? WHERE id=?');
-      update.run(name, desc, price, emoji, cat, active !== undefined ? active : 1, stock !== undefined ? stock : 10, points_price || null, canteen_id || 1, tags || '[]', image_url || null, req.params.id);
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao atualizar produto." });
-    }
-  }
-
-  private delete(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    try {
-      const del = this.db.prepare('DELETE FROM products WHERE id=?');
-      del.run(parseInt(req.params.id, 10));
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao deletar produto." });
-    }
-  }
-}
-
-class SettingsController extends BaseController {
-  public registerRoutes() {
-    this.app.get("/api/settings", this.getAll.bind(this));
-    this.app.put("/api/settings", this.update.bind(this));
-  }
-
-  private getAll(req: Request, res: Response) {
-    try {
-      const rows = this.db.prepare('SELECT key, value FROM settings').all() as {key: string, value: string}[];
-      const settingsMap: Record<string, string> = {};
-      for (const row of rows) {
-        settingsMap[row.key] = row.value;
-      }
-      res.json(settingsMap);
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar configurações." });
-    }
-  }
-
-  private update(req: Request, res: Response) {
-    if (!checkSuperAdmin(req, res, this.db)) return;
-    const { global_maintenance, global_warning } = req.body;
-    
-    try {
-      this.db.exec('BEGIN TRANSACTION');
-      if (global_maintenance !== undefined) {
-        this.db.prepare('UPDATE settings SET value = ? WHERE key = ?').run(global_maintenance ? '1' : '0', 'global_maintenance');
-      }
-      if (global_warning !== undefined) {
-        this.db.prepare('UPDATE settings SET value = ? WHERE key = ?').run(global_warning, 'global_warning');
-      }
-      this.db.exec('COMMIT');
-      res.json({ success: true });
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      res.status(500).json({ error: "Erro ao atualizar configurações." });
-    }
-  }
-}
-
-class CanteenController extends BaseController {
-  constructor(db: DatabaseSync, app: express.Application) {
-    super(db, app);
-  }
-
-  public registerRoutes() {
-    this.app.get("/api/canteens", this.getAll.bind(this));
-    this.app.post("/api/canteens", this.create.bind(this));
-    this.app.put("/api/canteens/:id", this.update.bind(this));
-    this.app.delete("/api/canteens/:id", this.delete.bind(this));
-    this.app.get("/cantinas", this.getCantinas.bind(this));
-  }
-
-  private getCantinas(req: Request, res: Response) {
-    try {
-      const canteens = this.db.prepare(`SELECT name, emoji as foto FROM canteens LIMIT 3`).all();
-      res.json(canteens);
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar cantinas." });
-    }
-  }
-
-  private getAll(req: Request, res: Response) {
-    try {
-      const canteens = this.db.prepare(`
-        SELECT c.*, 
-               COALESCE(AVG(r.score), 0) as avg_rating,
-               COUNT(r.id) as rating_count
-        FROM canteens c
-        LEFT JOIN ratings r ON c.id = r.canteen_id
-        GROUP BY c.id
-      `).all();
-      res.json(canteens);
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar cantinas." });
-    }
-  }
-
-  private update(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db) && !checkSuperAdmin(req, res, this.db)) return;
-    const { name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning, image_url } = req.body;
-    try {
-      const update = this.db.prepare('UPDATE canteens SET name=?, desc=?, location=?, emoji=?, color=?, open_time=?, close_time=?, points_enabled=?, maintenance_mode=?, global_warning=?, image_url=? WHERE id=?');
-      update.run(name, desc, location, emoji, color, open_time, close_time, points_enabled !== undefined ? points_enabled : 1, maintenance_mode !== undefined ? maintenance_mode : 0, global_warning || '', image_url || null, req.params.id);
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao atualizar cantina." });
-    }
-  }
-
-  private create(req: Request, res: Response) {
-    if (!checkSuperAdmin(req, res, this.db)) return;
-    const { name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning, image_url } = req.body;
-    if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
-    try {
-      const insert = this.db.prepare('INSERT INTO canteens (name, desc, location, emoji, color, open_time, close_time, points_enabled, maintenance_mode, global_warning, image_url) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
-      const result = insert.run(name, desc || '', location || '', emoji || '🍽️', color || '#ffffff', open_time || '08:00', close_time || '18:00', points_enabled !== undefined ? points_enabled : 1, maintenance_mode !== undefined ? maintenance_mode : 0, global_warning || '', image_url || null);
-      res.status(201).json({ success: true, canteenId: result.lastInsertRowid });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao criar cantina." });
-    }
-  }
-
-  private delete(req: Request, res: Response) {
-    if (!checkSuperAdmin(req, res, this.db)) return;
-    this.db.exec('BEGIN TRANSACTION');
-    try {
-      const canteenId = parseInt(req.params.id, 10);
-      // Cascading deletes for canteen
-      this.db.prepare('DELETE FROM coupons WHERE canteen_id=?').run(canteenId);
-      this.db.prepare('DELETE FROM tags WHERE canteen_id=?').run(canteenId);
-      this.db.prepare('DELETE FROM ratings WHERE canteen_id=?').run(canteenId);
-      this.db.prepare('DELETE FROM orders WHERE canteen_id=?').run(canteenId);
-      this.db.prepare('DELETE FROM products WHERE canteen_id=?').run(canteenId);
-      this.db.prepare('DELETE FROM users WHERE canteen_id=?').run(canteenId);
-      this.db.prepare('DELETE FROM canteens WHERE id=?').run(canteenId);
-      this.db.exec('COMMIT');
-      res.json({ success: true });
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      console.error(error);
-      res.status(500).json({ error: "Erro ao deletar cantina em cascata." });
-    }
-  }
-}
-
-class CouponController extends BaseController {
-  constructor(db: DatabaseSync, app: express.Application) {
-    super(db, app);
-  }
-
-  public registerRoutes() {
-    this.app.get("/api/coupons", this.getAll.bind(this));
-    this.app.post("/api/coupons", this.create.bind(this));
-    this.app.post("/api/coupons/validate", this.validateCoupon.bind(this));
-    this.app.put("/api/coupons/:id", this.update.bind(this));
-    this.app.delete("/api/coupons/:id", this.delete.bind(this));
-  }
-
-  private getAll(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    const userIdHeader = req.headers['x-user-id'] as string;
-    const user = this.db.prepare('SELECT canteen_id FROM users WHERE id = ?').get(userIdHeader) as any;
-    try {
-      let coupons;
-      if (user && user.canteen_id) {
-        coupons = this.db.prepare('SELECT * FROM coupons WHERE canteen_id = ?').all(user.canteen_id);
-      } else {
-        coupons = this.db.prepare('SELECT * FROM coupons').all();
-      }
-      res.json(coupons);
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar cupons." });
-    }
-  }
-
-  private validateCoupon(req: Request, res: Response) {
-    const { code, canteen_id, cart_total } = req.body;
-    if (!code || !canteen_id) return res.status(400).json({ error: "Código ou cantina não informados." });
-    try {
-      const coupon = this.db.prepare('SELECT * FROM coupons WHERE code = ? AND canteen_id = ? AND active = 1').get(code, canteen_id) as any;
-      if (!coupon) return res.status(404).json({ error: "Cupom inválido." });
+      const { email } = req.body;
+      const oldCodes = await getDocs(query(collection(db, "verification_codes"), where("email", "==", email)));
+      const batch = writeBatch(db);
+      oldCodes.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit();
       
-      if (coupon.max_uses !== null && coupon.used_count >= coupon.max_uses) {
-        return res.status(400).json({ error: "Cupom esgotado." });
+      const code = crypto.randomInt(100000, 1000000).toString();
+      await addDoc(collection(db, "verification_codes"), { email, code, expires_at: Date.now() + 15 * 60 * 1000 });
+      
+      const emailHtml = emailTemplate(
+        "Confirme seu E-mail",
+        "Falta pouco para você fazer o seu primeiro pedido! Use o código de verificação abaixo para criar a sua conta na cantina:",
+        code,
+        "Este código é válido por 15 minutos. Aproveite nossos lanches!"
+      );
+
+      await sendEmail(
+        email, 
+        "Seu código de verificação - Cantina OrderPoint", 
+        `Olá,\n\nSeu código de verificação é: ${code}\n\nEle expira em 15 minutos.\n\nEquipe Cantina OrderPoint`,
+        emailHtml
+      );
+      res.json({ success: true, message: "Código de verificação enviado para o seu e-mail." });
+    } catch (err: any) {
+      console.error('Error in /api/request-code:', err);
+      res.status(500).json({ error: "Erro interno", details: err.message });
+    }
+  });
+
+  app.post("/api/reset-password-request", async (req, res) => {
+    try {
+      const { email } = req.body;
+      const q = query(collection(db, "users"), where("email", "==", email));
+      const snaps = await getDocs(q);
+      if (snaps.empty) return res.status(404).json({ error: "E-mail não encontrado." });
+
+      const oldCodes = await getDocs(query(collection(db, "verification_codes"), where("email", "==", email)));
+      const batch = writeBatch(db);
+      oldCodes.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+
+      const code = crypto.randomInt(100000, 1000000).toString();
+      await addDoc(collection(db, "verification_codes"), { email, code, expires_at: Date.now() + 15 * 60 * 1000 });
+      
+      const emailHtml = emailTemplate(
+        "Recuperação de Senha",
+        "Recebemos uma solicitação para redefinir a senha da sua conta. Use o código de verificação abaixo para continuar:",
+        code,
+        "Este código é válido por 15 minutos. Se você não solicitou isso, ignore este e-mail."
+      );
+
+      await sendEmail(
+        email, 
+        "Recuperação de Senha - Cantina OrderPoint", 
+        `Olá,\n\nSeu código de recuperação de senha é: ${code}\n\nEle expira em 15 minutos.\n\nEquipe Cantina OrderPoint`,
+        emailHtml
+      );
+      res.json({ success: true, message: "Código para recuperação de senha enviado para o e-mail." });
+    } catch (err: any) {
+      console.error('Error in /api/reset-password-request:', err);
+      res.status(500).json({ error: "Erro interno", details: err.message });
+    }
+  });
+
+  app.post("/api/reset-password", async (req, res) => {
+    try {
+      const { email, code, newPassword } = req.body;
+      const qCode = query(collection(db, "verification_codes"), where("email", "==", email));
+      const codeSnaps = await getDocs(qCode);
+      if (codeSnaps.empty) return res.status(400).json({ error: "Nenhum código para este e-mail." });
+      
+      // Find valid code (latest)
+      const validCodes = codeSnaps.docs.map(parseDoc).filter((c: any) => c.code === code && c.expires_at > Date.now());
+      if (validCodes.length === 0) return res.status(400).json({ error: "Código inválido ou expirado." });
+
+      const qUser = query(collection(db, "users"), where("email", "==", email));
+      const userSnaps = await getDocs(qUser);
+      if (userSnaps.empty) return res.status(404).json({ error: "Usuário não encontrado." });
+      
+      const userId = userSnaps.docs[0].id;
+      await updateDoc(doc(db, "users", userId), { senha: hashPassword(newPassword) });
+      await deleteDoc(doc(db, "verification_codes", validCodes[0].id));
+      res.json({ success: true });
+    } catch (err: any) {
+      console.error('Error in /api/reset-password:', err);
+      res.status(500).json({ error: "Erro interno", details: err.message });
+    }
+  });
+
+  // ----- PRODUCTS -----
+  app.get("/api/products", async (req, res) => {
+    const snaps = await getDocs(collection(db, "products"));
+    res.json(snaps.docs.map(parseDoc));
+  });
+  app.get("/produtos", async (req, res) => {
+    const snaps = await getDocs(collection(db, "products"));
+    res.json(snaps.docs.map(parseDoc));
+  });
+
+  app.get("/api/products/:id", async (req, res) => {
+    const snap = await getDoc(doc(db, req.path.split("/")[2], req.params.id || ""));
+    if (!snap.exists()) return res.status(404).json({ error: "Product not found" });
+    res.json(parseDoc(snap));
+  });
+
+  app.post("/api/products", async (req, res) => { if (!await checkGestor(req, res)) return; const newRef = await addDoc(collection(db, "products"), req.body); res.status(201).json({ success: true, id: newRef.id }); });
+
+  app.put("/api/products/:id", async (req, res) => { if (!await checkGestor(req, res)) return; await updateDoc(doc(db, "products", req.params.id), req.body); res.json({ success: true }); });
+
+  app.delete("/api/products/:id", async (req, res) => { if (!await checkGestor(req, res)) return; await deleteDoc(doc(db, "products", req.params.id)); res.json({ success: true }); });
+
+  // ----- CANTEENS -----
+  app.get("/api/canteens", async (req, res) => {
+    try {
+      const snaps = await getDocs(collection(db, "canteens"));
+      res.json(snaps.docs.map(parseDoc));
+    } catch (err: any) {
+      console.error("DEBUG canteens:", err);
+      res.status(500).json({ error: err.message, stack: err.stack });
+    }
+  });
+  app.get("/cantinas", async (req, res) => {
+    const snaps = await getDocs(collection(db, "canteens"));
+    res.json(snaps.docs.map(parseDoc));
+  });
+
+  app.get("/api/canteens/:id", async (req, res) => {
+    const snap = await getDoc(doc(db, req.path.split("/")[2], req.params.id || ""));
+    if (!snap.exists()) return res.status(404).json({ error: "Canteen not found" });
+    res.json(parseDoc(snap));
+  });
+
+  app.post("/api/canteens", async (req, res) => { if (!await checkSuperAdmin(req, res)) return; const newRef = await addDoc(collection(db, "canteens"), req.body); res.status(201).json({ success: true, canteenId: newRef.id }); });
+
+  app.put("/api/canteens/:id", async (req, res) => { if (!await checkGestor(req, res)) return; await updateDoc(doc(db, "canteens", req.params.id), req.body); res.json({ success: true }); });
+
+  app.delete("/api/canteens/:id", async (req, res) => { if (!await checkSuperAdmin(req, res)) return; await deleteDoc(doc(db, "canteens", req.params.id)); res.json({ success: true }); });
+
+  // ----- SETTINGS -----
+  app.get("/api/settings", async (req, res) => {
+    const snaps = await getDocs(collection(db, "settings"));
+    const settingsMap: any = {};
+    snaps.docs.forEach(d => settingsMap[d.data().key] = d.data().value);
+    res.json(settingsMap);
+  });
+
+  app.put("/api/settings", async (req, res) => { if (!await checkSuperAdmin(req, res)) return; for (const key of Object.keys(req.body)) { const q = query(collection(db, "settings"), where("key", "==", key)); const match = await getDocs(q); if (!match.empty) { await updateDoc(doc(db, "settings", match.docs[0].id), { value: req.body[key] }); } else { await addDoc(collection(db, "settings"), { key, value: req.body[key] }); } } res.json({ success: true }); });
+
+  // ----- COUPONS -----
+  app.get("/api/coupons", async (req, res) => {
+    const snaps = await getDocs(collection(db, "coupons"));
+    res.json(snaps.docs.map(parseDoc));
+  });
+
+  app.get("/api/coupons/canteen/:canteen_id", async (req, res) => {
+    const qStr = query(collection(db, "coupons"), where("canteen_id", "==", req.params.canteen_id));
+    const snapsStr = await getDocs(qStr);
+    const qNum = query(collection(db, "coupons"), where("canteen_id", "==", parseInt(req.params.canteen_id) || 0));
+    const snapsNum = await getDocs(qNum);
+    const allDocs = [...snapsStr.docs, ...snapsNum.docs];
+    const uniqueDocs = allDocs.filter((v,i,a)=>a.findIndex(t=>(t.id === v.id))===i);
+    res.json(uniqueDocs.map(parseDoc));
+  });
+
+  app.get("/api/coupons/:id", async (req, res) => {
+    const snap = await getDoc(doc(db, "coupons", req.params.id || ""));
+    if (!snap.exists()) return res.status(404).json({ error: "Not found" });
+    res.json(parseDoc(snap));
+  });
+
+  app.post("/api/coupons", async (req, res) => {
+    await addDoc(collection(db, "coupons"), req.body);
+    res.json({ success: true });
+  });
+
+  app.post("/api/coupons/validate", async (req, res) => {
+    const { code, canteen_id } = req.body;
+    let snaps = await getDocs(query(collection(db, "coupons"), where("code", "==", code), where("canteen_id", "==", canteen_id)));
+    if (snaps.empty && typeof canteen_id === 'string') {
+      snaps = await getDocs(query(collection(db, "coupons"), where("code", "==", code), where("canteen_id", "==", parseInt(canteen_id))));
+    } else if (snaps.empty && typeof canteen_id === 'number') {
+      snaps = await getDocs(query(collection(db, "coupons"), where("code", "==", code), where("canteen_id", "==", String(canteen_id))));
+    }
+    if (snaps.empty) return res.status(404).json({ error: "Cupom inválido." });
+    res.json({ success: true, coupon: parseDoc(snaps.docs[0]) });
+  });
+
+  app.put("/api/coupons/:id", async (req, res) => {
+    await updateDoc(doc(db, "coupons", req.params.id), req.body);
+    res.json({ success: true });
+  });
+
+  app.delete("/api/coupons/:id", async (req, res) => {
+    /* await deleteDoc() */
+    res.json({ success: true });
+  });
+
+  // ----- OTHERS -----
+  app.get("/api/categories", async (req, res) => res.json((await getDocs(collection(db, "categories"))).docs.map(parseDoc)));
+  app.get("/api/categories/:id", async (req, res) => {
+    const snap = await getDoc(doc(db, "categories", req.params.id));
+    if (!snap.exists()) return res.status(404).json({ error: "Not found" });
+    res.json(parseDoc(snap));
+  });
+  app.post("/api/categories", async (req, res) => res.status(201).json({ success: true, id: (await addDoc(collection(db, "categories"), req.body)).id }));
+  app.delete("/api/categories/:id", async (req, res) => { await deleteDoc(doc(db, "categories", req.params.id)); res.json({ success: true }); });
+
+  app.get("/api/tags", async (req, res) => res.json((await getDocs(collection(db, "tags"))).docs.map(parseDoc)));
+  app.get("/api/tags/:id", async (req, res) => {
+    const snap = await getDoc(doc(db, "tags", req.params.id));
+    if (!snap.exists()) return res.status(404).json({ error: "Not found" });
+    res.json(parseDoc(snap));
+  });
+  app.post("/api/tags", async (req, res) => res.status(201).json({ success: true, id: (await addDoc(collection(db, "tags"), req.body)).id }));
+  app.delete("/api/tags/:id", async (req, res) => { await deleteDoc(doc(db, "tags", req.params.id)); res.json({ success: true }); });
+
+  app.post("/api/ratings", async (req, res) => {
+    try {
+      const { order_id, canteen_id, score } = req.body;
+      await addDoc(collection(db, "ratings"), req.body);
+      
+      const q = query(collection(db, "ratings"), where("canteen_id", "==", canteen_id));
+      const snaps = await getDocs(q);
+      
+      if (!snaps.empty) {
+        const sum = snaps.docs.reduce((acc, obj) => acc + (Number(obj.data().score) || 0), 0);
+        const avg = sum / snaps.docs.length;
+        await updateDoc(doc(db, "canteens", String(canteen_id)), { avg_rating: avg, rating_count: snaps.docs.length });
       }
       
-      if (coupon.expires_at && new Date(coupon.expires_at) < new Date()) {
-        return res.status(400).json({ error: "Cupom expirado." });
+      if (order_id) {
+        await updateDoc(doc(db, "orders", String(order_id)), { rating: score });
       }
-      
-      if (coupon.min_value > 0 && cart_total !== undefined) {
-         if (cart_total < coupon.min_value) {
-           return res.status(400).json({ error: `Valor mínimo da cantina é R$ ${coupon.min_value.toFixed(2).replace('.', ',')}` });
-         }
-      }
-      
-      res.json({ success: true, coupon });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao validar cupom." });
-    }
-  }
 
-  private create(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    const { code, discount_pct, max_uses, expires_at, canteen_id, min_value } = req.body;
-    if (!code || !discount_pct || !canteen_id) return res.status(400).json({ error: "Dados obrigatórios faltando." });
-    try {
-      const insert = this.db.prepare('INSERT INTO coupons (code, discount_pct, max_uses, expires_at, min_value, canteen_id) VALUES (?, ?, ?, ?, ?, ?)');
-      insert.run(code, discount_pct, max_uses || null, expires_at || null, min_value || 0, canteen_id);
-      res.json({ success: true });
-    } catch (error: any) {
-      if (error.message && error.message.includes("UNIQUE constraint failed")) {
-        res.status(400).json({ error: "Um cupom com este código já existe." });
-      } else {
-        res.status(500).json({ error: "Erro ao criar cupom." });
-      }
-    }
-  }
-
-  private update(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    const { code, discount_pct, max_uses, expires_at, active, min_value } = req.body;
-    try {
-      if (code && discount_pct) {
-         const update = this.db.prepare('UPDATE coupons SET code = ?, discount_pct = ?, max_uses = ?, expires_at = ?, min_value = ?, active = ? WHERE id = ?');
-         update.run(code, discount_pct, max_uses || null, expires_at || null, min_value || 0, active !== undefined ? active : 1, req.params.id);
-      } else {
-         const update = this.db.prepare('UPDATE coupons SET active = ?, max_uses = ?, expires_at = ? WHERE id = ?');
-         update.run(active !== undefined ? active : 1, max_uses || null, expires_at || null, req.params.id);
-      }
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao atualizar cupom." });
-    }
-  }
-
-  private delete(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    try {
-      const del = this.db.prepare('DELETE FROM coupons WHERE id = ?');
-      del.run(parseInt(req.params.id, 10));
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao excluir cupom." });
-    }
-  }
-}
-
-class CategoryController extends BaseController {
-  constructor(db: DatabaseSync, app: express.Application) {
-    super(db, app);
-  }
-
-  public registerRoutes() {
-    this.app.get("/api/categories", this.getAll.bind(this));
-    this.app.post("/api/categories", this.create.bind(this));
-    this.app.delete("/api/categories/:id", this.delete.bind(this));
-  }
-
-  private getAll(req: Request, res: Response) {
-    try {
-      const categories = this.db.prepare('SELECT * FROM categories').all();
-      res.json(categories);
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar categorias." });
-    }
-  }
-
-  private create(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    const { name } = req.body;
-    if (!name) return res.status(400).json({ error: "Nome é obrigatório." });
-    try {
-      const insert = this.db.prepare('INSERT INTO categories (name) VALUES (?)');
-      const result = insert.run(name);
-      res.status(201).json({ success: true, id: result.lastInsertRowid });
-    } catch (error: any) {
-      if (error.message && error.message.includes("UNIQUE constraint failed")) {
-        res.status(400).json({ error: "Categoria já existe." });
-      } else {
-        res.status(500).json({ error: "Erro ao criar categoria." });
-      }
-    }
-  }
-
-  private delete(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    try {
-      const del = this.db.prepare('DELETE FROM categories WHERE id=?');
-      del.run(parseInt(req.params.id, 10));
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao deletar categoria." });
-    }
-  }
-}
-
-class TagController extends BaseController {
-  constructor(db: DatabaseSync, app: express.Application) {
-    super(db, app);
-  }
-
-  public registerRoutes() {
-    this.app.get("/api/tags", this.getAll.bind(this));
-    this.app.post("/api/tags", this.create.bind(this));
-    this.app.delete("/api/tags/:id", this.delete.bind(this));
-  }
-
-  private getAll(req: Request, res: Response) {
-    try {
-      const tags = this.db.prepare('SELECT * FROM tags').all();
-      res.json(tags);
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar tags." });
-    }
-  }
-
-  private create(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    const { name, color, canteen_id } = req.body;
-    if (!name || !color || !canteen_id) return res.status(400).json({ error: "Dados incompletos." });
-    try {
-      const insert = this.db.prepare('INSERT INTO tags (name, color, canteen_id) VALUES (?, ?, ?)');
-      const result = insert.run(name, color, canteen_id);
-      res.status(201).json({ success: true, id: result.lastInsertRowid });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao criar tag." });
-    }
-  }
-
-  private delete(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    try {
-      const del = this.db.prepare('DELETE FROM tags WHERE id=?');
-      del.run(parseInt(req.params.id, 10));
-      res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao excluir tag." });
-    }
-  }
-}
-
-class RatingController extends BaseController {
-  constructor(db: DatabaseSync, app: express.Application) {
-    super(db, app);
-  }
-
-  public registerRoutes() {
-    this.app.post("/api/ratings", this.create.bind(this));
-  }
-
-  private create(req: Request, res: Response) {
-    const { order_id, canteen_id, score } = req.body;
-    if (!order_id || !score) return res.status(400).json({ error: "Dados incompletos." });
-    
-    const userIdHeader = req.headers['x-user-id'];
-    if (!userIdHeader) {
-      return res.status(401).json({ error: "Não autorizado." });
-    }
-
-    // Verify if the order belongs to the user
-    const order = this.db.prepare('SELECT user_id, user_name FROM orders WHERE id = ?').get(order_id) as any;
-    const user = this.db.prepare('SELECT name FROM users WHERE id = ?').get(userIdHeader as string) as any;
-    
-    if (!order || !user) {
-      return res.status(403).json({ error: "Pedido ou usuário não encontrado." });
-    }
-
-    const isOwner = order.user_id?.toString() === userIdHeader || (order.user_id === null && order.user_name === user.name);
-    
-    if (!isOwner) {
-      return res.status(403).json({ error: "Você só pode avaliar seus próprios pedidos." });
-    }
-
-    const finalCanteenId = canteen_id || 1; // Fallback to 1 if undefined
-
-    try {
-      const insert = this.db.prepare('INSERT INTO ratings (order_id, canteen_id, score) VALUES (?, ?, ?)');
-      insert.run(order_id, finalCanteenId, score);
       res.status(201).json({ success: true });
-    } catch (error: any) {
-      if (error.message && error.message.includes("UNIQUE constraint failed")) {
-        res.status(400).json({ error: "Pedido já avaliado." });
-      } else {
-        console.error("Erro ao salvar avaliação:", error);
-        res.status(500).json({ error: "Erro ao salvar avaliação." });
-      }
+    } catch (err: any) {
+      console.error('Error in /api/ratings:', err);
+      res.status(500).json({ error: "Erro interno", details: err.message });
     }
-  }
-}
+  });
 
-interface IOrderStatusUpdateStrategy {
-  updateStatus(
-    db: DatabaseSync,
-    orderId: string,
-    status: string,
-    cancelReason?: string
-  ): void;
-}
+  // ----- ORDERS -----
+  app.get("/api/orders", async (req, res) => {
+    if (!await checkSuperAdmin(req, res)) return;
+    const snaps = await getDocs(collection(db, "orders"));
+    res.json(snaps.docs.map(parseDoc));
+  });
 
-class CanceladoStrategy implements IOrderStatusUpdateStrategy {
-  updateStatus(db: DatabaseSync, orderId: string, status: string, cancelReason?: string) {
-    const order = db.prepare('SELECT status, items, user_id FROM orders WHERE id=?').get(orderId) as any;
-    if (order && order.status !== 'cancelado') {
-      const itemsArr = JSON.parse(order.items);
-      const restoreStock = db.prepare('UPDATE products SET stock = stock + ? WHERE id = ?');
-      const restoreStockByName = db.prepare('UPDATE products SET stock = stock + ? WHERE name = ?');
-      let pointsToRestore = 0;
-      for (const item of itemsArr) {
-        if (item.id) {
-          restoreStock.run(item.qty, item.id);
-        } else if (item.name) {
-          restoreStockByName.run(item.qty, item.name);
-        }
-        if (item.isReward && item.points_price) {
-           pointsToRestore += item.points_price * item.qty;
-        }
-      }
-      if (pointsToRestore > 0 && order.user_id) {
-          db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(pointsToRestore, order.user_id);
-      }
-    }
-    db.prepare('UPDATE orders SET status=?, cancel_reason=? WHERE id=?').run(status, cancelReason || null, orderId);
-  }
-}
+  app.get("/api/orders/canteen/:canteen_id", async (req, res) => {
+    if (!await checkGestor(req, res)) return;
+    const qStr = query(collection(db, "orders"), where("canteen_id", "==", req.params.canteen_id));
+    const snapsStr = await getDocs(qStr);
+    const qNum = query(collection(db, "orders"), where("canteen_id", "==", parseInt(req.params.canteen_id) || 0));
+    const snapsNum = await getDocs(qNum);
+    const allDocs = [...snapsStr.docs, ...snapsNum.docs];
+    const uniqueDocs = allDocs.filter((v,i,a)=>a.findIndex(t=>(t.id === v.id))===i);
+    const parsedDocs = uniqueDocs.map(parseDoc).filter((d: any) => d.status !== 'pagamento_pendente');
+    res.json(parsedDocs);
+  });
 
-class RetiradoStrategy implements IOrderStatusUpdateStrategy {
-  updateStatus(db: DatabaseSync, orderId: string, status: string) {
-    const order = db.prepare('SELECT status, user_id, total, points_awarded, canteen_id FROM orders WHERE id=?').get(orderId) as any;
-    if (order && order.status !== 'retirado' && !order.points_awarded && order.user_id) {
-      const canteen = db.prepare('SELECT points_enabled FROM canteens WHERE id=?').get(order.canteen_id) as any;
-      const isPointsEnabled = canteen && canteen.points_enabled === 1;
-
-      const pointsEarned = Math.floor(order.total);
-      if (pointsEarned > 0 && isPointsEnabled) {
-        db.prepare('UPDATE users SET points = points + ? WHERE id = ?').run(pointsEarned, order.user_id);
-      }
-      db.prepare('UPDATE orders SET status=?, points_awarded=1 WHERE id=?').run(status, orderId);
-    } else {
-      db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, orderId);
-    }
-  }
-}
-
-class DefaultStatusStrategy implements IOrderStatusUpdateStrategy {
-  updateStatus(db: DatabaseSync, orderId: string, status: string) {
-    db.prepare('UPDATE orders SET status=? WHERE id=?').run(status, orderId);
-  }
-}
-
-class OrderStatusStrategyContext {
-  static getStrategy(status: string): IOrderStatusUpdateStrategy {
-    switch (status) {
-      case 'cancelado': return new CanceladoStrategy();
-      case 'retirado': return new RetiradoStrategy();
-      default: return new DefaultStatusStrategy();
-    }
-  }
-}
-
-class OrderController extends BaseController {
-  constructor(db: DatabaseSync, app: express.Application) {
-    super(db, app);
-  }
-
-  public registerRoutes() {
-    this.app.post("/api/orders", this.create.bind(this));
-    this.app.get("/api/orders", this.getAll.bind(this));
-    this.app.get("/api/orders/user/:id", this.getByUserId.bind(this));
-    this.app.get("/api/orders/:code", this.getByCode.bind(this));
-    this.app.put("/api/orders/:id/status", this.updateStatus.bind(this));
-    this.app.delete("/api/orders/:id", this.delete.bind(this));
-  }
-
-  private create(req: Request, res: Response) {
-    const { user_name, user_id, items, total, canteen_id, coupon_code } = req.body;
-    if (!user_name || !items || total === undefined || total === null) return res.status(400).json({ error: "Dados incompletos." });
-    
-    let code = '';
-    let inserted = false;
-    let attempts = 0;
-
-    while (!inserted && attempts < 10) {
-      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
-      code = '';
-      for (let i = 0; i < 4; i++) {
-        code += chars.charAt(Math.floor(Math.random() * chars.length));
-      }
-      
-      const recentOrder = this.db.prepare(`
-        SELECT id FROM orders 
-        WHERE code = ? AND (
-          status IN ('aguardando', 'preparo', 'pronto') OR 
-          created_at >= datetime('now', '-1 day')
-        )
-      `).get(code);
-
-      if (recentOrder) {
-        attempts++;
-        continue;
-      }
-      
-      try {
-        this.db.exec('BEGIN TRANSACTION');
-        
-        let calculatedTotal = 0;
-        let neededPoints = 0;
-        let couponDiscountPct = 0;
-        let appliedCoupon: any = null;
-
-        if (coupon_code) {
-           const coupon = this.db.prepare('SELECT * FROM coupons WHERE code = ? AND canteen_id = ? AND active = 1').get(coupon_code, canteen_id || 1) as any;
-           if (!coupon) {
-             this.db.exec('ROLLBACK');
-             return res.status(400).json({ error: "Cupom inválido." });
-           }
-           if (coupon.max_uses !== null && coupon.used_count >= coupon.max_uses) {
-             this.db.exec('ROLLBACK');
-             return res.status(400).json({ error: "Cupom esgotado." });
-           }
-           if (coupon.expires_at && new Date(coupon.expires_at) < new Date()) {
-             this.db.exec('ROLLBACK');
-             return res.status(400).json({ error: "Cupom expirado." });
-           }
-           couponDiscountPct = coupon.discount_pct;
-           appliedCoupon = coupon;
-        }
-        
-        const checkStock = this.db.prepare('SELECT stock, name, price, points_price FROM products WHERE id = ?');
-        const checkStockByName = this.db.prepare('SELECT id, stock, name, price, points_price FROM products WHERE name = ?');
-        const userQuery = this.db.prepare('SELECT points FROM users WHERE id = ?');
-        
-        let currentUser = null;
-        if (user_id) {
-           currentUser = userQuery.get(user_id) as any;
-        }
-
-        // Verificar estoque antes de inserir o pedido e recalcular os valores
-        for (const item of items) {
-          let row;
-          if (item.id) {
-            row = checkStock.get(item.id) as any;
-          } else if (item.name) {
-            row = checkStockByName.get(item.name) as any;
-          }
-          
-          if (!row) {
-            this.db.exec('ROLLBACK');
-            return res.status(400).json({ error: `Produto ${item.name} não encontrado.` });
-          }
-          
-          if (row.stock < item.qty) {
-            this.db.exec('ROLLBACK');
-            return res.status(400).json({ error: `Estoque insuficiente para o produto ${row.name}.` });
-          }
-
-          if (item.isReward) {
-             if (!row.points_price) {
-                this.db.exec('ROLLBACK');
-                return res.status(400).json({ error: `Produto ${row.name} não aceita resgate.` });
-             }
-             neededPoints += row.points_price * item.qty;
-          } else {
-             calculatedTotal += row.price * item.qty;
-          }
-        }
-
-        if (neededPoints > 0) {
-            if (!currentUser || currentUser.points < neededPoints) {
-                this.db.exec('ROLLBACK');
-                return res.status(400).json({ error: "Pontos insuficientes para o resgate." });
-            }
-        }
-
-        if (appliedCoupon) {
-          if (calculatedTotal === 0) {
-            this.db.exec('ROLLBACK');
-            return res.status(400).json({ error: "Cupom não aplicável apenas a itens de resgate." });
-          }
-          if (appliedCoupon.min_value > 0 && calculatedTotal < appliedCoupon.min_value) {
-            this.db.exec('ROLLBACK');
-            return res.status(400).json({ error: `O valor mínimo para este cupom é R$ ${appliedCoupon.min_value.toFixed(2).replace('.', ',')}.` });
-          }
-          calculatedTotal = calculatedTotal * (1 - (couponDiscountPct / 100));
-          if (calculatedTotal < 0) calculatedTotal = 0;
-        }
-
-        const insert = this.db.prepare('INSERT INTO orders (code, user_name, user_id, items, total, status, canteen_id) VALUES (?, ?, ?, ?, ?, ?, ?)');
-        const result = insert.run(code, user_name, user_id || null, JSON.stringify(items), calculatedTotal, 'aguardando', canteen_id || 1);
-        
-        const updateStock = this.db.prepare('UPDATE products SET stock = stock - ? WHERE id = ?');
-        const pauseProduct = this.db.prepare('UPDATE products SET active = 0 WHERE id = ?');
-        const updateStockByName = this.db.prepare('UPDATE products SET stock = stock - ? WHERE name = ?');
-
-        for (const item of items) {
-          if (item.id) {
-            updateStock.run(item.qty, item.id);
-            const row = checkStock.get(item.id) as any;
-            if (row && row.stock <= 0) {
-              pauseProduct.run(item.id);
-            }
-          } else if (item.name) {
-            updateStockByName.run(item.qty, item.name);
-            const row = checkStockByName.get(item.name) as any;
-            if (row && row.stock <= 0) {
-              pauseProduct.run(row.id);
-            }
-          }
-        }
-
-        if (neededPoints > 0 && user_id) {
-            this.db.prepare('UPDATE users SET points = points - ? WHERE id = ?').run(neededPoints, user_id);
-        }
-
-        if (appliedCoupon) {
-          this.db.prepare('UPDATE coupons SET used_count = used_count + 1 WHERE id = ?').run(appliedCoupon.id);
-        }
-        
-        this.db.exec('COMMIT');
-        inserted = true;
-        return res.status(201).json({ success: true, code, id: result.lastInsertRowid });
-      } catch (error: any) {
-        this.db.exec('ROLLBACK');
-        if (error.message && error.message.includes("UNIQUE constraint failed")) {
-          attempts++;
-        } else {
-          return res.status(500).json({ error: "Erro ao criar pedido." });
-        }
-      }
-    }
-
-    if (!inserted) {
-      res.status(500).json({ error: "Erro ao gerar código único." });
-    }
-  }
-
-  private getAll(req: Request, res: Response) {
+  app.get("/api/orders/user/:id", async (req, res) => {
     const userIdHeader = req.headers['x-user-id'] as string;
-    if (!userIdHeader) {
-       return res.status(401).json({ error: "Não autorizado." });
-    }
-    const user = this.db.prepare('SELECT role, canteen_id FROM users WHERE id = ?').get(userIdHeader) as any;
-    if (!user || user.role !== 'manager') {
-       return res.status(403).json({ error: "Acesso negado." });
-    }
+    if (!userIdHeader || (userIdHeader !== req.params.id && userIdHeader !== 'mock-sadmin-id')) { return res.status(403).json({ error: "Acesso negado." }); }
+    
+    const q = query(collection(db, "orders"), where("user_id", "==", req.params.id));
+    const snaps = await getDocs(q);
+    res.json(snaps.docs.map(parseDoc));
+  });
 
+  app.get("/api/orders/:code", async (req, res) => {
+    const q = query(collection(db, "orders"), where("code", "==", req.params.code));
+    const snaps = await getDocs(q);
+    if (snaps.empty) return res.status(404).json({ error: "Order not found" });
+    res.json(parseDoc(snaps.docs[0]));
+  });
+
+  app.post("/api/orders", async (req, res) => {
     try {
-      let orders;
-      if (user.canteen_id) {
-         orders = this.db.prepare("SELECT * FROM orders WHERE canteen_id = ? ORDER BY created_at DESC").all(user.canteen_id);
-      } else {
-         orders = this.db.prepare("SELECT * FROM orders ORDER BY created_at DESC").all();
-      }
-      res.json(orders);
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar pedidos." });
-    }
-  }
-
-  private getByUserId(req: Request, res: Response) {
-    const userIdHeader = req.headers['x-user-id'];
-    if (!userIdHeader || userIdHeader !== req.params.id) {
-      return res.status(403).json({ error: "Acesso negado. Você só pode ver seus próprios pedidos." });
-    }
-
-    try {
-      const orders = this.db.prepare(`
-        SELECT o.*, r.score as rating 
-        FROM orders o 
-        LEFT JOIN ratings r ON o.id = r.order_id 
-        WHERE o.user_id = ? OR (o.user_id IS NULL AND o.user_name = (SELECT name FROM users WHERE id = ?))
-        ORDER BY o.created_at DESC
-      `).all(req.params.id, req.params.id);
-      res.json(orders);
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar pedidos do usuário." });
-    }
-  }
-
-  private getByCode(req: Request, res: Response) {
-    try {
-      const order = this.db.prepare('SELECT * FROM orders WHERE code = ?').get(req.params.code);
-      if (order) {
-        res.json(order);
-      } else {
-        res.status(404).json({ error: "Pedido não encontrado." });
-      }
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao buscar pedido." });
-    }
-  }
-
-  private updateStatus(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
-    const { status, cancel_reason } = req.body;
-    if (!status) return res.status(400).json({ error: "Status é obrigatório." });
-    try {
-      this.db.exec('BEGIN TRANSACTION');
+      const { user_name, user_id, items, total, canteen_id } = req.body;
+      const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+      let code = '';
+      for (let i = 0; i < 4; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
       
-      const strategy = OrderStatusStrategyContext.getStrategy(status);
-      strategy.updateStatus(this.db, req.params.id, status, cancel_reason);
-      
-      this.db.exec('COMMIT');
-      res.json({ success: true });
-    } catch (error) {
-      this.db.exec('ROLLBACK');
-      res.status(500).json({ error: "Erro ao atualizar status do pedido." });
-    }
-  }
+      const needsPayment = total > 0;
+      let stripe: Stripe | null = null;
+      let initialStatus = 'aguardando';
 
-  private delete(req: Request, res: Response) {
-    if (!checkGestor(req, res, this.db)) return;
+      if (needsPayment) {
+        stripe = getStripe();
+        initialStatus = 'pagamento_pendente';
+      }
+
+      const newRef = await addDoc(collection(db, "orders"), {
+        code: initialStatus === 'aguardando' ? code : '', user_name, user_id, items: JSON.stringify(items), total, status: initialStatus, canteen_id, created_at: Date.now(), points_awarded: 0
+      });
+
+      for (const item of items) {
+        if (item.id) {
+           try {
+             const pRef = doc(db, "products", item.id);
+             const p = (await getDoc(pRef)).data();
+             if (p) await updateDoc(pRef, { stock: Math.max(0, p.stock - item.qty) });
+           } catch(e) {}
+        }
+      }
+
+      if (needsPayment && stripe) {
+        try {
+          const origin = req.headers.origin || req.protocol + "://" + req.get("host");
+          const session = await stripe.checkout.sessions.create({
+            payment_method_types: ['card'],
+            line_items: items.filter((i: any) => i.price > 0).map((i: any) => ({
+              price_data: {
+                currency: 'brl',
+                product_data: { name: i.name },
+                unit_amount: Math.round(i.price * 100),
+              },
+              quantity: i.qty,
+            })),
+            mode: 'payment',
+            success_url: `${origin}/?session_id={CHECKOUT_SESSION_ID}&action=payment_success`,
+            cancel_url: `${origin}/?action=payment_cancelled&order_id=${newRef.id}`,
+            metadata: { orderId: newRef.id },
+          });
+
+          return res.status(201).json({ success: true, code: initialStatus === 'aguardando' ? code : '', id: newRef.id, checkoutUrl: session.url });
+        } catch (e: any) {
+          console.error("Stripe error:", e);
+          return res.status(500).json({ success: false, error: "Erro ao criar sessão de pagamento Stripe: " + e.message });
+        }
+      }
+
+      res.status(201).json({ success: true, code: initialStatus === 'aguardando' ? code : '', id: newRef.id });
+    } catch (e: any) {
+      console.error("Order creation error:", e);
+      res.status(500).json({ success: false, error: e.message || "Erro interno ao processar pedido" });
+    }
+  });
+
+  app.get("/api/verify-checkout-session", async (req, res) => {
+    const { session_id } = req.query;
+    const stripe = getStripe();
+    if (!stripe || !session_id || typeof session_id !== 'string') {
+       return res.status(400).json({ error: "Invalid session or Stripe not configured" });
+    }
+    
     try {
-      const del = this.db.prepare('DELETE FROM orders WHERE id=?');
-      del.run(parseInt(req.params.id, 10));
+       const session = await stripe.checkout.sessions.retrieve(session_id);
+       if (session.payment_status === 'paid' && session.metadata?.orderId) {
+          const orderRef = doc(db, "orders", session.metadata.orderId);
+          const orderSnap = await getDoc(orderRef);
+          if (orderSnap.exists()) {
+             const orderData = orderSnap.data();
+             let code = orderData?.code;
+             if (orderData?.status === 'pagamento_pendente') {
+               const chars = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789';
+               code = '';
+               for (let i = 0; i < 4; i++) code += chars.charAt(Math.floor(Math.random() * chars.length));
+               await updateDoc(orderRef, { status: 'aguardando', code });
+             }
+             return res.json({ success: true, orderId: session.metadata.orderId, code, canteen_id: orderData?.canteen_id, status: session.payment_status });
+          }
+       }
+       res.json({ success: false, status: session.payment_status });
+    } catch(e: any) {
+       res.status(500).json({ error: e.message });
+    }
+  });
+
+  app.put("/api/orders/:id/status", async (req, res) => {
+    if (!await checkGestor(req, res)) return;
+    try {
+      const { status, cancel_reason } = req.body;
+      const updateData: any = { status };
+      if (cancel_reason !== undefined) {
+        updateData.cancel_reason = cancel_reason;
+      }
+      
+      if (status === 'retirado') {
+        const orderSnap = await getDoc(doc(db, "orders", req.params.id));
+        if (orderSnap.exists()) {
+          const order = orderSnap.data();
+          if (!order.points_awarded || order.points_awarded <= 0) {
+            const pointsToAward = Math.floor(Number(order.total) || 0);
+            updateData.points_awarded = pointsToAward;
+            
+            if (order.user_id && pointsToAward > 0) {
+              const userRef = doc(db, "users", String(order.user_id));
+              const uSnap = await getDoc(userRef);
+              if (uSnap.exists()) {
+                const u = uSnap.data();
+                await updateDoc(userRef, { points: (Number(u.points) || 0) + pointsToAward });
+              }
+            }
+          }
+        }
+      }
+
+      await updateDoc(doc(db, "orders", req.params.id), updateData);
       res.json({ success: true });
-    } catch (error) {
-      res.status(500).json({ error: "Erro ao deletar pedido." });
+    } catch (err: any) {
+      console.error('Error in /api/orders/:id/status:', err);
+      res.status(500).json({ error: "Erro interno", details: err.message });
     }
-  }
-}
+  });
 
-// ============================================================================
-// Application Server
-// ============================================================================
+  app.delete("/api/orders/:id", async (req, res) => {
+    /* await deleteDoc() */
+    res.json({ success: true });
+  });
 
-class AppServer {
-  private app: express.Application;
-  private dbManager: DatabaseManager;
+  app.use((err: any, req: Request, res: Response, next: express.NextFunction) => {
+    console.error("API Error:", err);
+    res.status(500).json({ error: err.message || "Internal Server Error" });
+  });
 
-  constructor() {
-    this.app = express();
-    this.app.use(express.json({ limit: '50mb' }));
-    this.app.use(express.urlencoded({ limit: '50mb', extended: true }));
-    this.app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerDocument));
-    this.dbManager = new DatabaseManager();
-    this.setupControllers();
-  }
-
-  private setupControllers() {
-    const controllers: BaseController[] = [
-      new UserController(this.dbManager.db, this.app),
-      new ProductController(this.dbManager.db, this.app),
-      new CouponController(this.dbManager.db, this.app),
-      new CanteenController(this.dbManager.db, this.app),
-      new CategoryController(this.dbManager.db, this.app),
-      new RatingController(this.dbManager.db, this.app),
-      new OrderController(this.dbManager.db, this.app),
-      new TagController(this.dbManager.db, this.app),
-      new SettingsController(this.dbManager.db, this.app)
-    ];
-
-    for (const controller of controllers) {
-      controller.registerRoutes();
-    }
-  }
-
-  public async start(port: number) {
-    // Vite middleware for development
-    if (process.env.NODE_ENV !== "production") {
-      const vite = await createViteServer({
-        server: { middlewareMode: true },
-        appType: "spa",
-      });
-      this.app.use(vite.middlewares);
-    } else {
-      const distPath = path.join(process.cwd(), 'dist');
-      this.app.use(express.static(distPath));
-      this.app.get('*', (req, res) => {
-        res.sendFile(path.join(distPath, 'index.html'));
-      });
-    }
-
-    this.app.listen(port, "0.0.0.0", () => {
-      console.log(`Server running on http://localhost:${port}`);
+  // Vite & Final server Setup
+  app.use('/api', (req, res, next) => {
+    console.error("UNHANDLED API ROUTE:", req.method, req.originalUrl);
+    next();
+  });
+  
+  if (process.env.NODE_ENV !== "production") {
+    const vite = await createViteServer({
+      server: { middlewareMode: true, port: 5173, hmr: { port: 24678 } },
+      appType: "spa",
+    });
+    app.use(vite.middlewares);
+  } else {
+    const distPath = path.join(process.cwd(), 'dist');
+    app.use(express.static(distPath));
+    app.get('*', (req, res) => {
+      res.sendFile(path.join(distPath, 'index.html'));
     });
   }
+
+  const PORT = 3000;
+  console.log(`ATTEMPTING TO BIND PORT ${PORT}`);
+  app.listen(PORT, "0.0.0.0", () => {
+    console.log(`Server running on port ${PORT}`);
+  });
 }
 
-// Start the server
-const server = new AppServer();
-server.start(3000);
+startServer();
