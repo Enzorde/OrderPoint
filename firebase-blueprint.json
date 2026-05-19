@@ -1,0 +1,154 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "A user of the application",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "matricula": { "type": "string" },
+        "role": { "type": "string", "enum": ["student", "manager", "superadmin"] },
+        "points": { "type": "number" },
+        "canteen_id": { "type": "number" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["name", "email", "role"]
+    },
+    "Product": {
+      "title": "Product",
+      "description": "A product available in a canteen",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "desc": { "type": "string" },
+        "price": { "type": "number" },
+        "emoji": { "type": "string" },
+        "cat": { "type": "string" },
+        "active": { "type": "number" },
+        "stock": { "type": "number" },
+        "points_price": { "type": "number" },
+        "canteen_id": { "type": "number" },
+        "tags": { "type": "string" },
+        "image_url": { "type": "string" }
+      },
+      "required": ["name", "price", "cat", "canteen_id"]
+    },
+    "Canteen": {
+      "title": "Canteen",
+      "description": "A canteen location",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "desc": { "type": "string" },
+        "location": { "type": "string" },
+        "emoji": { "type": "string" },
+        "color": { "type": "string" },
+        "open_time": { "type": "string" },
+        "close_time": { "type": "string" },
+        "points_enabled": { "type": "number" },
+        "maintenance_mode": { "type": "number" },
+        "global_warning": { "type": "string" },
+        "image_url": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "Order": {
+      "title": "Order",
+      "description": "A food order placed by a user",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "user_name": { "type": "string" },
+        "user_id": { "type": "string" },
+        "items": { "type": "string" },
+        "total": { "type": "number" },
+        "status": { "type": "string", "enum": ["aguardando", "preparo", "pronto", "retirado", "cancelado"] },
+        "canteen_id": { "type": "number" },
+        "points_awarded": { "type": "number" },
+        "cancel_reason": { "type": "string" },
+        "created_at": { "type": "number" }
+      },
+      "required": ["code", "user_name", "items", "total", "status", "canteen_id"]
+    },
+    "Category": {
+      "title": "Category",
+      "description": "Product category",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "Tag": {
+      "title": "Tag",
+      "description": "Product tag",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "color": { "type": "string" },
+        "canteen_id": { "type": "number" }
+      },
+      "required": ["name", "color", "canteen_id"]
+    },
+    "Coupon": {
+      "title": "Coupon",
+      "description": "Discount coupon",
+      "type": "object",
+      "properties": {
+        "code": { "type": "string" },
+        "discount_pct": { "type": "number" },
+        "max_uses": { "type": "number" },
+        "used_count": { "type": "number" },
+        "expires_at": { "type": "string" },
+        "min_value": { "type": "number" },
+        "canteen_id": { "type": "number" },
+        "active": { "type": "number" }
+      },
+      "required": ["code", "discount_pct", "canteen_id"]
+    },
+    "Settings": {
+      "title": "Settings",
+      "description": "Global Settings",
+      "type": "object",
+      "properties": {
+        "global_maintenance": { "type": "string" },
+        "global_warning": { "type": "string" }
+      }
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "User profiles and credentials"
+    },
+    "products/{productId}": {
+      "schema": "Product",
+      "description": "Available products"
+    },
+    "canteens/{canteenId}": {
+      "schema": "Canteen",
+      "description": "Canteens"
+    },
+    "orders/{orderId}": {
+      "schema": "Order",
+      "description": "Orders"
+    },
+    "categories/{categoryId}": {
+      "schema": "Category",
+      "description": "Categories"
+    },
+    "tags/{tagId}": {
+      "schema": "Tag",
+      "description": "Tags"
+    },
+    "coupons/{couponId}": {
+      "schema": "Coupon",
+      "description": "Coupons"
+    },
+    "settings/{settingId}": {
+      "schema": "Settings",
+      "description": "Settings"
+    }
+  }
+}
