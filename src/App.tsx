@@ -42,17 +42,17 @@ function LazyMedia({ imageUrl, emoji, alt, className, style, onClick, onMouseEnt
 }
 
 type User = {
-  id?: number;
+  id?: string | number;
   name: string;
   email?: string;
   matricula?: string;
-  role: 'student' | 'manager' | 'superadmin';
+  role: 'student' | 'manager' | 'superadmin' | string;
   points?: number;
-  canteen_id?: number;
+  canteen_id?: string | number;
 };
 
 type Product = {
-  id: number;
+  id: string | number;
   name: string;
   desc: string;
   price: number;
@@ -61,33 +61,33 @@ type Product = {
   active: number;
   stock: number;
   points_price?: number;
-  canteen_id?: number;
+  canteen_id?: string | number;
   tags?: string;
   isReward?: boolean;
   image_url?: string;
 };
 
 type Tag = {
-  id: number;
+  id: string | number;
   name: string;
   color: string;
-  canteen_id: number;
+  canteen_id: string | number;
 };
 
 type Coupon = {
-  id: number;
+  id: string | number;
   code: string;
   discount_pct: number;
   max_uses: number | null;
   used_count: number;
   expires_at: string | null;
   min_value: number;
-  canteen_id: number;
+  canteen_id: string | number;
   active: number;
 };
 
 type Canteen = {
-  id: number;
+  id: string | number;
   name: string;
   desc: string;
   location: string;
@@ -104,34 +104,75 @@ type Canteen = {
 };
 
 type Order = {
-  id: number;
+  id: string | number;
   code: string;
   user_name: string;
   items: string; // JSON string
   total: number;
   status: 'aguardando' | 'preparo' | 'pronto' | 'retirado' | 'cancelado';
-  canteen_id: number;
+  canteen_id: string | number;
   rating?: number;
   created_at: string;
   cancel_reason?: string;
 };
 
 type Category = {
-  id: number;
+  id: string | number;
   name: string;
+  canteen_id?: string | number;
 };
 
 type Screen = 'login' | 'login-gestor' | 'cadastro' | 'esqueci-senha' | 'cantinas' | 'catalogo' | 'carrinho' | 'confirmacao' | 'status' | 'gestor' | 'meus-pedidos' | 'perfil' | 'pontos' | 'superadmin';
 
-export const formatBrazilTime = (dateString: string) => {
-  const d = dateString.includes('Z') ? new Date(dateString) : new Date(dateString.replace(' ', 'T') + 'Z');
+export const formatBrazilTime = (dateString: string | number) => {
+  const d = typeof dateString === 'number' ? new Date(dateString) : (dateString.includes('Z') ? new Date(dateString) : new Date(dateString.replace(' ', 'T') + 'Z'));
   return d.toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
 };
 
-export const formatBrazilDate = (dateString: string) => {
-  const d = dateString.includes('Z') ? new Date(dateString) : new Date(dateString.replace(' ', 'T') + 'Z');
+export const formatBrazilDate = (dateString: string | number) => {
+  const d = typeof dateString === 'number' ? new Date(dateString) : (dateString.includes('Z') ? new Date(dateString) : new Date(dateString.replace(' ', 'T') + 'Z'));
   return d.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' });
 };
+
+function EmptyState({ title, description, emoji = '🤷' }: { title: string, description?: string, emoji?: string }) {
+  return (
+    <div style={{ padding: '40px 20px', textAlign: 'center', background: 'var(--bg-secondary)', borderRadius: '16px', border: '1px dashed var(--line)' }}>
+      <div style={{ fontSize: '48px', marginBottom: '16px' }}>{emoji}</div>
+      <h3 style={{ fontSize: '18px', fontWeight: 'bold', marginBottom: '8px', color: 'var(--text)' }}>{title}</h3>
+      {description && <p style={{ color: 'var(--muted)', fontSize: '14px' }}>{description}</p>}
+    </div>
+  );
+}
+
+function ScrollableRow({ children, className = "", wrapperClassName = "", style }: { children: React.ReactNode, className?: string, wrapperClassName?: string, style?: React.CSSProperties }) {
+  const [showLeft, setShowLeft] = useState(false);
+  const [showRight, setShowRight] = useState(false);
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  const handleScroll = useCallback(() => {
+    if (!scrollRef.current) return;
+    const { scrollLeft, scrollWidth, clientWidth } = scrollRef.current;
+    setShowLeft(scrollLeft > 5);
+    setShowRight(Math.ceil(scrollLeft + clientWidth) < scrollWidth - 5);
+  }, []);
+
+  useEffect(() => {
+    handleScroll();
+    window.addEventListener('resize', handleScroll);
+    setTimeout(handleScroll, 100);
+    return () => window.removeEventListener('resize', handleScroll);
+  }, [children, handleScroll]);
+
+  return (
+    <div className={`scrollable-wrapper ${wrapperClassName}`} style={style}>
+      <div className={`scroll-hint left ${showLeft ? 'visible' : ''}`}><span>←</span></div>
+      <div className={`scrollable-content ${className}`} ref={scrollRef} onScroll={handleScroll}>
+        {children}
+      </div>
+      <div className={`scroll-hint right ${showRight ? 'visible' : ''}`}><span>→</span></div>
+    </div>
+  );
+}
 
 const playNotificationSound = () => {
   try {
@@ -211,7 +252,7 @@ function ScreenPontos({ goTo, products, canteens, currentUser, setCurrentUser, s
 
       <h2 style={{ marginBottom: 16 }}>Recompensas Disponíveis</h2>
       {redeemableProducts.length === 0 ? (
-        <div className="empty-state">Nenhum produto disponível para resgate no momento.</div>
+        <EmptyState title="Nenhuma recompensa" description="Nenhum produto disponível para resgate no momento." emoji="🎁" />
       ) : (
         <div>
           {Object.entries(groupedProducts).map(([canteenIdStr, canteenProducts]) => {
@@ -461,6 +502,7 @@ export default function App() {
     return [];
   });
   const [orderCode, setOrderCode] = useState<string>('');
+  const [confirmedOrders, setConfirmedOrders] = useState<{code: string, canteenName: string, checkoutUrl?: string}[]>([]);
   const [couponCodeState, setCouponCodeState] = useState('');
   const [appliedCoupon, setAppliedCoupon] = useState<Coupon | null>(null);
   const [couponError, setCouponError] = useState('');
@@ -531,8 +573,10 @@ export default function App() {
   const fetchProducts = async () => {
     try {
       const res = await fetch('/api/products');
-      const data = await res.json();
-      setProducts(data);
+      if (res.ok) {
+        const data = await res.json();
+        setProducts(data);
+      }
     } catch (err) {
       console.error("Erro ao carregar produtos", err);
     }
@@ -541,8 +585,10 @@ export default function App() {
   const fetchCategories = async () => {
     try {
       const res = await fetch('/api/categories');
-      const data = await res.json();
-      setCategories(data);
+      if (res.ok) {
+        const data = await res.json();
+        setCategories(data);
+      }
     } catch (err) {
       console.error("Erro ao carregar categorias", err);
     }
@@ -551,8 +597,10 @@ export default function App() {
   const fetchTags = async () => {
     try {
       const res = await fetch('/api/tags');
-      const data = await res.json();
-      setTags(data);
+      if (res.ok) {
+        const data = await res.json();
+        setTags(data);
+      }
     } catch (err) {
       console.error("Erro ao carregar tags", err);
     }
@@ -576,11 +624,23 @@ export default function App() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isHelpModalOpen) {
+        setIsHelpModalOpen(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isHelpModalOpen]);
+
   const fetchCanteens = async () => {
     try {
       const res = await fetch('/api/canteens', { cache: 'no-store' });
-      const data = await res.json();
-      setCanteens(data);
+      if (res.ok) {
+        const data = await res.json();
+        setCanteens(data);
+      }
     } catch (err) {
       console.error("Erro ao carregar cantinas", err);
     }
@@ -671,13 +731,13 @@ export default function App() {
     try {
       // Find which canteen we are applying for, if cart is empty we don't know
       if (cart.length === 0) return;
-      const canteenIds = [...new Set(cart.map(item => item.canteen_id || products.find(p => p.id === item.id)?.canteen_id || 1))];
+      const canteenIds = [...new Set(cart.map(item => String(item.canteen_id || products.find(p => p.id === item.id)?.canteen_id || '1')))];
       
       let applicable: any = null;
       let errorMsg = 'Cupom inválido para as cantinas do carrinho.';
 
       for (const cid of canteenIds) {
-        const applicableItems = cart.filter(item => (item.canteen_id || products.find(p => p.id === item.id)?.canteen_id || 1) === cid && !item.isReward);
+        const applicableItems = cart.filter(item => String((item.canteen_id || products.find(p => p.id === item.id)?.canteen_id || '1')) === cid && !item.isReward);
         if (applicableItems.length === 0) {
           errorMsg = 'Nenhum item válido para desconto nesta cantina.';
           continue;
@@ -723,18 +783,18 @@ export default function App() {
     
     setIsSubmitting(true);
     // Group items by canteen
-    const ordersByCanteen: Record<number, CartItem[]> = {};
+    const ordersByCanteen: Record<string, CartItem[]> = {};
     for (const item of cart) {
-      const cid = item.canteen_id || products.find(p => p.id === item.id)?.canteen_id || 1;
+      const cid = String(item.canteen_id || products.find(p => p.id === item.id)?.canteen_id || '1');
       if (!ordersByCanteen[cid]) ordersByCanteen[cid] = [];
       ordersByCanteen[cid].push(item);
     }
     
     try {
       let createdCodes: string[] = [];
+      let newConfirmedOrders: { code: string, canteenName: string }[] = [];
       let totalPointsDeducted = 0;
-      for (const [cidStr, items] of Object.entries(ordersByCanteen)) {
-        const canteen_id = parseInt(cidStr);
+      for (const [canteen_id, items] of Object.entries(ordersByCanteen)) {
         const total = items.reduce((sum, item) => sum + item.price * item.qty, 0);
         const applicableTotal = items.filter(i => !i.isReward).reduce((sum, item) => sum + item.price * item.qty, 0);
         const pointsDeducted = items.reduce((sum, item) => sum + (item.isReward && item.points_price ? item.points_price * item.qty : 0), 0);
@@ -748,14 +808,22 @@ export default function App() {
             items: items,
             total: total,
             canteen_id: canteen_id,
-            coupon_code: appliedCoupon && appliedCoupon.canteen_id === canteen_id && applicableTotal >= (appliedCoupon.min_value || 0) && applicableTotal > 0 ? appliedCoupon.code : undefined
+            coupon_code: appliedCoupon && String(appliedCoupon.canteen_id) === canteen_id && applicableTotal >= (appliedCoupon.min_value || 0) && applicableTotal > 0 ? appliedCoupon.code : undefined
           })
         });
         
         const data = await res.json();
         if (res.ok && data.success) {
            createdCodes.push(data.code);
+           const canteenName = canteens.find((c) => String(c.id) === String(canteen_id))?.name || 'Cantina';
+           newConfirmedOrders.push({ code: data.code, canteenName });
            totalPointsDeducted += pointsDeducted;
+           
+           if (data.checkoutUrl) {
+             window.localStorage.setItem('cartToClear', 'true');
+             window.location.href = data.checkoutUrl;
+             return;
+           }
         } else {
            throw new Error(data.error || 'Erro ao finalizar pedido.');
         }
@@ -766,7 +834,13 @@ export default function App() {
       }
 
       setOrderCode(createdCodes.join(', '));
-      updateCart([]);
+      setConfirmedOrders(newConfirmedOrders);
+      if (window.localStorage.getItem('cartToClear') !== 'true') {
+        updateCart([]);
+      } else {
+        window.localStorage.removeItem('cartToClear');
+        updateCart([]);
+      }
       setAppliedCoupon(null);
       setCouponCodeState('');
       goTo('confirmacao');
@@ -777,6 +851,35 @@ export default function App() {
       setIsSubmitting(false);
     }
   };
+
+  useEffect(() => {
+    const query = new URLSearchParams(window.location.search);
+    const sessionId = query.get('session_id');
+    const action = query.get('action');
+
+    if (action === 'payment_success' && sessionId) {
+      fetch(`/api/verify-checkout-session?session_id=${sessionId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.success) {
+            showToast('Pagamento confirmado com sucesso!');
+            window.history.replaceState({}, document.title, window.location.pathname);
+            setOrderCode(data.code || '');
+            const canteenName = canteens.find((c) => String(c.id) === String(data.canteen_id))?.name || 'Cantina';
+            if (data.code) {
+              setConfirmedOrders([{ code: data.code, canteenName }]);
+            }
+            goTo('confirmacao'); // Show order confirmation
+            updateCart([]);
+            window.localStorage.removeItem('cartToClear');
+          }
+        })
+        .catch(console.error);
+    } else if (action === 'payment_cancelled') {
+        showToast('Pagamento cancelado.');
+        window.history.replaceState({}, document.title, window.location.pathname);
+    }
+  }, [canteens]);
 
   const logout = () => {
     setCart([]);
@@ -823,49 +926,49 @@ export default function App() {
       )}
       {showNavbar && (
         <nav id="navbar">
-          <div className="nav-logo" onClick={() => goTo(currentUser?.role === 'manager' ? 'gestor' : 'cantinas')} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}><img src="/logo.png" alt="Logo" style={{ height: 32, objectFit: 'contain' }} /> <img src="/op.png" alt="OrderPoint" style={{ height: 24, objectFit: 'contain' }} /></div>
-          <div className="nav-right">
-            <button
-              className="btn-outline"
-              style={{ padding: '6px 12px', fontSize: 13, border: 'none', background: 'var(--card)' }}
-              onClick={() => setIsHelpModalOpen(true)}
-              title="Ajuda e Documentação"
-            >
-              ❓ Ajuda
-            </button>
-            <span 
-              className="nav-user" 
-              id="nav-username" 
-              onClick={() => goTo('perfil')}
-              style={{ cursor: 'pointer', padding: '6px 10px', borderRadius: '8px', transition: 'background 0.2s' }}
-              onMouseEnter={(e) => e.currentTarget.style.background = 'var(--primary-soft)'}
-              onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
-            >
-              👤 {currentUser?.name}
-            </span>
-            {currentUser?.role === 'student' && (
-              <>
-                <button className="btn-secondary" style={{ padding: '8px 14px', fontSize: '13px' }} onClick={() => goTo('pontos')}>
-                  ⭐️ Meus Pontos ({currentUser.points || 0})
-                </button>
-                <button className="btn-secondary" style={{ padding: '8px 14px', fontSize: '13px' }} onClick={() => goTo('meus-pedidos')}>
-                  📦 Meus Pedidos
-                </button>
-                <button className="cart-btn" onClick={() => goTo('carrinho')}>
-                  🛒 Carrinho <span className="cart-badge" id="cart-count">{cartCount}</span>
-                </button>
-              </>
-            )}
-            <button 
-              className="btn-secondary" 
-              style={{ width: 36, height: 36, padding: 0, fontSize: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%' }} 
-              onClick={() => setIsDarkMode(!isDarkMode)}
-              title={isDarkMode ? 'Modo Claro' : 'Modo Escuro'}
-            >
-              {isDarkMode ? '☀️' : '🌙'}
-            </button>
-            <button className="btn-secondary" style={{ padding: '8px 14px', fontSize: '13px' }} onClick={logout}>Sair</button>
-          </div>
+          <div className="nav-logo" onClick={() => goTo(currentUser?.role === 'superadmin' ? 'superadmin' : currentUser?.role === 'manager' ? 'gestor' : 'cantinas')} style={{ cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '8px' }}><img src="/logo.png" alt="Logo" style={{ height: 32, objectFit: 'contain' }} /> <img src="/op.png" alt="OrderPoint" style={{ height: 24, objectFit: 'contain' }} /></div>
+          <ScrollableRow wrapperClassName="nav-right-wrapper" className="nav-right">
+              <button
+                className="btn-outline"
+                style={{ padding: '6px 12px', fontSize: 13, border: 'none', background: 'var(--card)' }}
+                onClick={() => setIsHelpModalOpen(true)}
+                title="Ajuda e Documentação"
+              >
+                ❓ Ajuda
+              </button>
+              <span 
+                className="nav-user" 
+                id="nav-username" 
+                onClick={() => goTo('perfil')}
+                style={{ cursor: 'pointer', padding: '6px 10px', borderRadius: '8px', transition: 'background 0.2s' }}
+                onMouseEnter={(e) => e.currentTarget.style.background = 'var(--primary-soft)'}
+                onMouseLeave={(e) => e.currentTarget.style.background = 'transparent'}
+              >
+                👤 {currentUser?.name}
+              </span>
+              {currentUser?.role === 'student' && (
+                <>
+                  <button className="btn-secondary" style={{ padding: '8px 14px', fontSize: '13px' }} onClick={() => goTo('pontos')}>
+                    ⭐️ Meus Pontos ({currentUser.points || 0})
+                  </button>
+                  <button className="btn-secondary" style={{ padding: '8px 14px', fontSize: '13px' }} onClick={() => goTo('meus-pedidos')}>
+                    📦 Meus Pedidos
+                  </button>
+                  <button className="cart-btn" onClick={() => goTo('carrinho')}>
+                    🛒 Carrinho <span className="cart-badge" id="cart-count">{cartCount}</span>
+                  </button>
+                </>
+              )}
+              <button 
+                className="btn-secondary" 
+                style={{ width: 36, height: 36, padding: 0, fontSize: '18px', display: 'flex', alignItems: 'center', justifyContent: 'center', borderRadius: '50%' }} 
+                onClick={() => setIsDarkMode(!isDarkMode)}
+                title={isDarkMode ? 'Modo Claro' : 'Modo Escuro'}
+              >
+                {isDarkMode ? '☀️' : '🌙'}
+              </button>
+              <button className="btn-secondary" style={{ padding: '8px 14px', fontSize: '13px' }} onClick={logout}>Sair</button>
+          </ScrollableRow>
         </nav>
       )}
 
@@ -881,12 +984,12 @@ export default function App() {
           {currentScreen === 'login-gestor' && <ScreenLoginGestor goTo={goTo} setCurrentUser={setCurrentUser} showToast={showToast} />}
           {currentScreen === 'cadastro' && <ScreenCadastro goTo={goTo} />}
           {currentScreen === 'esqueci-senha' && <ScreenEsqueciSenha goTo={goTo} />}
-          {currentScreen === 'cantinas' && <ScreenCantinas goTo={goTo} canteens={canteens} setSelectedCanteen={setSelectedCanteen} />}
+          {currentScreen === 'cantinas' && <ScreenCantinas goTo={goTo} canteens={canteens} setSelectedCanteen={setSelectedCanteen} currentUser={currentUser} />}
           {currentScreen === 'catalogo' && <ScreenCatalogo goTo={goTo} addToCart={addToCart} products={products} selectedCanteen={selectedCanteen} categories={categories} tags={tags} currentUser={currentUser} cart={cart} showToast={showToast} />}
           {currentScreen === 'carrinho' && <ScreenCarrinho goBack={handleGoBackFromCart} cart={cart} changeQty={changeQty} clearCart={clearCart} finalizarPedido={finalizarPedido} isSubmitting={isSubmitting} couponCodeState={couponCodeState} setCouponCodeState={setCouponCodeState} handleApplyCoupon={handleApplyCoupon} appliedCoupon={appliedCoupon} couponError={couponError} setCouponError={setCouponError} selectedCanteen={selectedCanteen} products={products} />}
-          {currentScreen === 'confirmacao' && <ScreenConfirmacao goTo={goTo} orderCode={orderCode} />}
+          {currentScreen === 'confirmacao' && <ScreenConfirmacao goTo={goTo} orderCode={orderCode} confirmedOrders={confirmedOrders} />}
           {currentScreen === 'status' && <ScreenStatus goTo={goTo} orderCode={orderCode} />}
-          {currentScreen === 'meus-pedidos' && <ScreenMeusPedidos goTo={goTo} currentUser={currentUser} setOrderCode={setOrderCode} showToast={showToast} fetchCanteens={fetchCanteens} />}
+          {currentScreen === 'meus-pedidos' && <ScreenMeusPedidos goTo={goTo} currentUser={currentUser} setOrderCode={setOrderCode} showToast={showToast} fetchCanteens={fetchCanteens} canteens={canteens} />}
           {currentScreen === 'gestor' && <ScreenGestor products={products} tags={tags} fetchTags={fetchTags} currentUser={currentUser} fetchProducts={fetchProducts} showToast={showToast} canteens={canteens} fetchCanteens={fetchCanteens} categories={categories} fetchCategories={fetchCategories} />}
           {currentScreen === 'superadmin' && <ScreenSuperadmin goTo={goTo} currentUser={currentUser} showToast={showToast} fetchCanteens={fetchCanteens} globalSettings={globalSettings} fetchGlobalSettings={fetchGlobalSettings} />}
           {currentScreen === 'perfil' && <ScreenPerfil goTo={goTo} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} />}
@@ -1019,7 +1122,7 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
 
-  const [savedAccounts, setSavedAccounts] = useState<{email: string, name: string, token: string}[]>(() => {
+  const [savedAccounts, setSavedAccounts] = useState<{email: string, name: string, token: string, role?: string}[]>(() => {
     try {
       const stored = localStorage.getItem('cantinahub_saved_logins_student');
       return stored ? JSON.parse(stored) : [];
@@ -1053,6 +1156,7 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
           const newSaved = [...savedAccounts.filter(a => a.email !== data.user.email), {
             email: data.user.email,
             name: data.user.name,
+            role: data.user.role,
             token: btoa(p)
           }];
           setSavedAccounts(newSaved);
@@ -1060,6 +1164,7 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
         }
 
         setCurrentUser({ 
+          canteen_id: data.user.canteen_id,
           id: data.user.id,
           name: data.user.name, 
           email: data.user.email,
@@ -1067,7 +1172,13 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
           role: data.user.role,
           points: data.user.points || 0
         });
-        goTo('cantinas');
+        if (data.user.role === 'superadmin') {
+          goTo('superadmin');
+        } else if (data.user.role === 'manager') {
+          goTo('gestor');
+        } else {
+          goTo('cantinas');
+        }
       } else {
         setError(data.error || 'Erro ao fazer login.');
         if (overrideEmail) {
@@ -1124,13 +1235,12 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
               onChange={e => setSaveLogin(e.target.checked)} 
               style={{ width: 'auto', margin: 0 }}
             />
-            Lembrar-me neste computador
+            Lembrar neste dispositivo
           </label>
 
           <button className="btn-orange btn-full" onClick={() => doLogin()} disabled={loading}>
             {loading ? 'Entrando...' : 'Entrar'}
           </button>
-          <button className="btn-outline btn-full" onClick={() => goTo('login-gestor')}>Entrar como Gestor</button>
         </div>
 
         {savedAccounts.length > 0 && (
@@ -1149,7 +1259,7 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
                   }}
                   className="saved-account-card"
                 >
-                  <div style={{ fontSize: 20 }}>👤</div>
+                  <div style={{ fontSize: 20 }}>{acc.role === 'superadmin' ? '👑' : acc.role === 'manager' ? '👨‍💼' : '👤'}</div>
                   <div style={{ flex: 1, textAlign: 'left' }}>
                     <div style={{ fontWeight: 600, fontSize: 14, color: 'var(--text)' }}>{acc.name}</div>
                     <div style={{ fontSize: 12, color: 'var(--muted)' }}>{acc.email}</div>
@@ -1180,6 +1290,18 @@ function ScreenLogin({ goTo, setCurrentUser }: { goTo: (s: Screen) => void, setC
 }
 
 function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalSettings, fetchGlobalSettings }: { goTo: (s: Screen) => void, currentUser: User | null, showToast: (msg: string) => void, fetchCanteens: () => void, globalSettings: Record<string, string>, fetchGlobalSettings: () => void }) {
+  if (currentUser?.role !== 'superadmin') {
+    return (
+      <div className="page">
+        <div className="card" style={{ textAlign: 'center', marginTop: 40 }}>
+          <h2>Acesso Restrito</h2>
+          <p>Apenas administradores do sistema podem acessar esta tela.</p>
+          <button className="btn-orange" onClick={() => goTo('cantinas')} style={{ marginTop: 16 }}>Voltar ao Início</button>
+        </div>
+      </div>
+    );
+  }
+
   const [activeTab, setActiveTab] = useState<'gerenciar_usuarios' | 'gerenciar_cantinas' | 'criar_cantina' | 'criar_conta' | 'configuracoes'>('gerenciar_usuarios');
   const [canteens, setCanteens] = useState<Canteen[]>([]);
   const [users, setUsers] = useState<User[]>([]);
@@ -1188,7 +1310,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
   const [newManagerName, setNewManagerName] = useState('');
   const [newManagerEmail, setNewManagerEmail] = useState('');
   const [newManagerSenha, setNewManagerSenha] = useState('');
-  const [newManagerCanteen, setNewManagerCanteen] = useState<number | ''>('');
+  const [newManagerCanteen, setNewManagerCanteen] = useState<string>('');
   
   const [settingsMaintenance, setSettingsMaintenance] = useState(false);
   const [settingsWarning, setSettingsWarning] = useState('');
@@ -1226,7 +1348,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
   const [newManagerRole, setNewManagerRole] = useState<'manager' | 'superadmin' | 'student'>('manager');
   const [newManagerMatricula, setNewManagerMatricula] = useState('');
 
-  const [editingUser, setEditingUser] = useState<number | null>(null);
+  const [editingUser, setEditingUser] = useState<string | number | null>(null);
   const [editUserForm, setEditUserForm] = useState<Partial<User>>({});
 
   const [userSearch, setUserSearch] = useState('');
@@ -1240,11 +1362,11 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
   const [newCanteenCloseTime, setNewCanteenCloseTime] = useState('18:00');
   const [newCanteenPointsEnabled, setNewCanteenPointsEnabled] = useState(true);
 
-  const [editingCanteen, setEditingCanteen] = useState<number | null>(null);
+  const [editingCanteen, setEditingCanteen] = useState<string | number | null>(null);
   const [editCanteenForm, setEditCanteenForm] = useState<Partial<Canteen>>({});
 
-  const [deletingUser, setDeletingUser] = useState<number | null>(null);
-  const [deletingCanteen, setDeletingCanteen] = useState<number | null>(null);
+  const [deletingUser, setDeletingUser] = useState<string | number | null>(null);
+  const [deletingCanteen, setDeletingCanteen] = useState<string | number | null>(null);
 
   const fetchData = async () => {
     setLoading(true);
@@ -1270,9 +1392,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
 
   const handleCreateManager = async () => {
     if (!newManagerName || !newManagerEmail || !newManagerSenha) return showToast('Preencha os campos obrigatórios (Nome, E-mail, Senha)');
-    if (getPasswordStrength(newManagerSenha) < 4) {
-      return showToast('A senha deve conter ao menos uma letra maiúscula, uma minúscula, um número e um caractere especial.');
-    }
+    if (newManagerRole === 'manager' && !newManagerCanteen) return showToast('Selecione a Cantina que o Gestor irá administrar');
     const res = await fetch('/api/users/manager', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
@@ -1300,7 +1420,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
     }
   };
 
-  const handleUpdateUser = async (id: number) => {
+  const handleUpdateUser = async (id: string | number) => {
     if (!editUserForm.name || !editUserForm.email) return showToast('Nome e e-mail são obrigatórios!');
     const res = await fetch(`/api/users/admin/${id}`, {
       method: 'PUT',
@@ -1317,7 +1437,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
     }
   };
 
-  const handleDeleteUser = async (id: number) => {
+  const handleDeleteUser = async (id: string | number) => {
     const res = await fetch(`/api/users/${id}`, {
       method: 'DELETE',
       headers: { 'X-User-Id': currentUser?.id?.toString() || '' }
@@ -1369,7 +1489,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
     setEditCanteenForm(c);
   };
 
-  const handleUpdateCanteen = async (id: number) => {
+  const handleUpdateCanteen = async (id: string | number) => {
     if (!editCanteenForm.name) return showToast('Nome da cantina é obrigatório');
     const res = await fetch(`/api/canteens/${id}`, {
       method: 'PUT',
@@ -1386,7 +1506,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
     }
   };
 
-  const handleDeleteCanteen = async (id: number) => {
+  const handleDeleteCanteen = async (id: string | number) => {
     const res = await fetch(`/api/canteens/${id}`, {
       method: 'DELETE',
       headers: { 'X-User-Id': currentUser?.id?.toString() || '' }
@@ -1420,13 +1540,13 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
       </div>
 
       <div className="superadmin-layout">
-        <div className="superadmin-sidebar">
-          <button className={`gestor-tab ${activeTab === 'gerenciar_usuarios' ? 'active' : ''}`} onClick={() => setActiveTab('gerenciar_usuarios')} style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 8, width: '100%', border: 'none', background: activeTab === 'gerenciar_usuarios' ? 'var(--orange)' : 'transparent', color: activeTab === 'gerenciar_usuarios' ? '#fff' : 'var(--text)', fontWeight: activeTab === 'gerenciar_usuarios' ? 'bold' : 'normal', cursor: 'pointer' }}>👥 Gerenciar Usuários</button>
-          <button className={`gestor-tab ${activeTab === 'gerenciar_cantinas' ? 'active' : ''}`} onClick={() => setActiveTab('gerenciar_cantinas')} style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 8, width: '100%', border: 'none', background: activeTab === 'gerenciar_cantinas' ? 'var(--orange)' : 'transparent', color: activeTab === 'gerenciar_cantinas' ? '#fff' : 'var(--text)', fontWeight: activeTab === 'gerenciar_cantinas' ? 'bold' : 'normal', cursor: 'pointer' }}>🏪 Gerenciar Cantinas</button>
-          <button className={`gestor-tab ${activeTab === 'criar_cantina' ? 'active' : ''}`} onClick={() => setActiveTab('criar_cantina')} style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 8, width: '100%', border: 'none', background: activeTab === 'criar_cantina' ? 'var(--orange)' : 'transparent', color: activeTab === 'criar_cantina' ? '#fff' : 'var(--text)', fontWeight: activeTab === 'criar_cantina' ? 'bold' : 'normal', cursor: 'pointer' }}>➕ Criar Cantina</button>
-          <button className={`gestor-tab ${activeTab === 'criar_conta' ? 'active' : ''}`} onClick={() => setActiveTab('criar_conta')} style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 8, width: '100%', border: 'none', background: activeTab === 'criar_conta' ? 'var(--orange)' : 'transparent', color: activeTab === 'criar_conta' ? '#fff' : 'var(--text)', fontWeight: activeTab === 'criar_conta' ? 'bold' : 'normal', cursor: 'pointer' }}>➕ Criar Gestor</button>
-          <button className={`gestor-tab ${activeTab === 'configuracoes' ? 'active' : ''}`} onClick={() => setActiveTab('configuracoes')} style={{ textAlign: 'left', padding: '12px 16px', borderRadius: 8, width: '100%', border: 'none', background: activeTab === 'configuracoes' ? 'var(--orange)' : 'transparent', color: activeTab === 'configuracoes' ? '#fff' : 'var(--text)', fontWeight: activeTab === 'configuracoes' ? 'bold' : 'normal', cursor: 'pointer' }}>⚙️ Configurações</button>
-        </div>
+        <ScrollableRow wrapperClassName="superadmin-sidebar-wrapper" className="superadmin-sidebar" style={{ '--gradient-bg': 'var(--surface)' } as React.CSSProperties}>
+          <button className={`superadmin-tab ${activeTab === 'gerenciar_usuarios' ? 'active' : ''}`} onClick={() => setActiveTab('gerenciar_usuarios')}>👥 Gerenciar Usuários</button>
+          <button className={`superadmin-tab ${activeTab === 'gerenciar_cantinas' ? 'active' : ''}`} onClick={() => setActiveTab('gerenciar_cantinas')}>🏪 Gerenciar Cantinas</button>
+          <button className={`superadmin-tab ${activeTab === 'criar_cantina' ? 'active' : ''}`} onClick={() => setActiveTab('criar_cantina')}>➕ Criar Cantina</button>
+          <button className={`superadmin-tab ${activeTab === 'criar_conta' ? 'active' : ''}`} onClick={() => setActiveTab('criar_conta')}>➕ Criar Gestor</button>
+          <button className={`superadmin-tab ${activeTab === 'configuracoes' ? 'active' : ''}`} onClick={() => setActiveTab('configuracoes')}>⚙️ Configurações</button>
+        </ScrollableRow>
 
         <div style={{ flex: 1, minWidth: 0 }}>
       {loading ? (
@@ -1490,7 +1610,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
                                 </label>
                                 {editUserForm.role === 'manager' && (
                                   <label className="form-label">Cantina
-                                    <select className="form-input" value={editUserForm.canteen_id || ''} onChange={e => setEditUserForm({...editUserForm, canteen_id: Number(e.target.value)})} >
+                                    <select className="form-input" value={editUserForm.canteen_id || ''} onChange={e => setEditUserForm({...editUserForm, canteen_id: e.target.value})} >
                                       <option value="">Selecione...</option>
                                       {canteens.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                                     </select>
@@ -1581,12 +1701,12 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
                             <button className="btn-secondary btn-sm" onClick={() => setEditingCanteen(null)}>Cancelar</button>
                             <div style={{ flex: 1 }}></div>
                             {deletingCanteen !== c.id && (
-                              <button className="btn-sm" style={{ background: 'transparent', color: 'var(--danger)', textDecoration: 'underline', border: 'none' }} onClick={() => setDeletingCanteen(Number(c.id))}>Excluir Cantina</button>
+                              <button className="btn-sm" style={{ background: 'transparent', color: 'var(--danger)', textDecoration: 'underline', border: 'none' }} onClick={() => setDeletingCanteen(c.id)}>Excluir Cantina</button>
                             )}
                             {deletingCanteen === c.id && (
                               <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                                 <span style={{ fontSize: 13, color: 'var(--danger)' }}>Órfãos podem ser criados. Excluir?</span>
-                                <button className="btn-danger btn-sm" onClick={() => c.id && handleDeleteCanteen(Number(c.id))}>Sim, excluir</button>
+                                <button className="btn-danger btn-sm" onClick={() => c.id && handleDeleteCanteen(c.id)}>Sim, excluir</button>
                                 <button className="btn-secondary btn-sm" onClick={() => setDeletingCanteen(null)}>Não</button>
                               </div>
                             )}
@@ -1681,7 +1801,7 @@ function ScreenSuperadmin({ goTo, currentUser, showToast, fetchCanteens, globalS
                 </label>
                 {newManagerRole === 'manager' && (
                   <label className="form-label">Cantina Vinculada
-                    <select className="form-input" value={newManagerCanteen} onChange={e => setNewManagerCanteen(Number(e.target.value))}>
+                    <select className="form-input" value={newManagerCanteen} onChange={e => setNewManagerCanteen(e.target.value)}>
                       <option value="">Selecione...</option>
                       {canteens.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
                     </select>
@@ -1854,7 +1974,6 @@ function ScreenLoginGestor({ goTo, setCurrentUser, showToast }: { goTo: (s: Scre
         <div className="tag tag-orange">Acesso Restrito</div>
         
         <div style={{ marginTop: 24, textAlign: 'left' }}>
-          {error && <div className="auth-error">{error}</div>}
           <label style={{ display: 'block', marginBottom: 12 }}>E-mail
             <input 
               type="email" 
@@ -1882,7 +2001,7 @@ function ScreenLoginGestor({ goTo, setCurrentUser, showToast }: { goTo: (s: Scre
               onChange={e => setSaveLogin(e.target.checked)} 
               style={{ width: 'auto', margin: 0 }}
             />
-            Lembrar-me neste computador
+            Lembrar neste dispositivo
           </label>
           <button className="btn-orange btn-full" onClick={doManualLogin} disabled={loading}>
             {loading ? 'Entrando...' : 'Entrar'}
@@ -1930,6 +2049,7 @@ function ScreenLoginGestor({ goTo, setCurrentUser, showToast }: { goTo: (s: Scre
         <div className="auth-link" style={{ marginTop: 24 }}>
           <span onClick={() => goTo('login')}>← Voltar para login de aluno</span>
         </div>
+        {error && <div className="alert alert-error">{error}</div>}
       </div>
     </div>
   );
@@ -1954,6 +2074,7 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [devMsg, setDevMsg] = useState<string | null>(null);
 
   const pwdScore = getPasswordStrength(senha);
   const strengthColors = ['#e5e7eb', '#ef4444', '#f59e0b', '#3b82f6', '#10b981'];
@@ -2004,6 +2125,10 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
       if (res.ok && data.success) {
         setStep('verification');
         setError(null);
+        if (data.message) {
+          globalShowToast(data.message);
+        }
+        setDevMsg(null);
       } else {
         setError(data.error || 'Erro ao enviar código.');
       }
@@ -2094,6 +2219,11 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
               <div className="alert alert-info" style={{ marginBottom: 16 }}>
                 Enviamos um código de 6 dígitos para <strong>{email}</strong>.
               </div>
+              {devMsg && (
+                <div className="alert alert-warning" style={{ marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
+                  {devMsg}
+                </div>
+              )}
               <label>Código de Verificação
                 <input 
                   type="text" 
@@ -2108,7 +2238,10 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
               <button className="btn-orange btn-full" onClick={doCadastro} disabled={loading || success}>
                 {loading ? 'Verificando...' : 'Confirmar e Criar Conta'}
               </button>
-              <button className="btn-outline btn-full" onClick={() => setStep('form')} disabled={loading || success}>
+              <button className="btn-secondary btn-full" style={{ marginTop: 8 }} onClick={doRequestCode} disabled={loading || success}>
+                {loading ? 'Aguarde...' : 'Reenviar código'}
+              </button>
+              <button className="btn-outline btn-full" style={{ marginTop: 8 }} onClick={() => setStep('form')} disabled={loading || success}>
                 Voltar
               </button>
             </>
@@ -2135,6 +2268,7 @@ function ScreenEsqueciSenha({ goTo }: { goTo: (s: Screen) => void }) {
   const [error, setError] = useState<string | null>(null);
   const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [devMsg, setDevMsg] = useState<string | null>(null);
 
   const doRequestCode = async () => {
     if (!email) {
@@ -2155,6 +2289,10 @@ function ScreenEsqueciSenha({ goTo }: { goTo: (s: Screen) => void }) {
       if (res.ok && data.success) {
         setStep('verification');
         setError(null);
+        if (data.message) {
+          globalShowToast(data.message);
+        }
+        setDevMsg(null);
       } else {
         setError(data.error || 'Erro ao enviar código.');
       }
@@ -2240,6 +2378,11 @@ function ScreenEsqueciSenha({ goTo }: { goTo: (s: Screen) => void }) {
               <div className="alert alert-info" style={{ marginBottom: 16 }}>
                 Enviamos um código de 6 dígitos para <strong>{email}</strong>.
               </div>
+              {devMsg && (
+                <div className="alert alert-warning" style={{ marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
+                  {devMsg}
+                </div>
+              )}
               <label>Código de Verificação
                 <input 
                   type="text" 
@@ -2260,7 +2403,10 @@ function ScreenEsqueciSenha({ goTo }: { goTo: (s: Screen) => void }) {
               <button className="btn-orange btn-full" onClick={doResetPassword} disabled={loading || success}>
                 {loading ? 'Redefinindo...' : 'Redefinir Senha'}
               </button>
-              <button className="btn-outline btn-full" onClick={() => setStep('email')} disabled={loading || success}>
+              <button className="btn-secondary btn-full" style={{ marginTop: 8 }} onClick={doRequestCode} disabled={loading || success}>
+                {loading ? 'Aguarde...' : 'Reenviar código'}
+              </button>
+              <button className="btn-outline btn-full" style={{ marginTop: 8 }} onClick={() => setStep('email')} disabled={loading || success}>
                 Voltar
               </button>
             </>
@@ -2299,7 +2445,10 @@ export const isCanteenOpen = (canteen: Canteen) => {
   return currentTime >= openTime && currentTime <= closeTime;
 };
 
-function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Screen) => void, canteens: Canteen[], setSelectedCanteen: (c: Canteen) => void }) {
+function ScreenCantinas({ goTo, canteens, setSelectedCanteen, currentUser }: { goTo: (s: Screen) => void, canteens: Canteen[], setSelectedCanteen: (c: Canteen) => void, currentUser: User | null }) {
+  const visibleCanteens = currentUser?.role === 'manager' && currentUser.canteen_id 
+    ? canteens.filter(c => String(c.id) === String(currentUser.canteen_id))
+    : canteens;
 
   return (
     <div className="page">
@@ -2308,7 +2457,7 @@ function ScreenCantinas({ goTo, canteens, setSelectedCanteen }: { goTo: (s: Scre
         <p>Selecione a cantina onde deseja fazer seu pedido</p>
       </div>
       <div className="cantinas-grid">
-        {canteens.map(canteen => {
+        {visibleCanteens.map(canteen => {
           const isOpen = isCanteenOpen(canteen);
           const isMaintenance = canteen.maintenance_mode === 1;
           return (
@@ -2369,7 +2518,7 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
   const [addedProductId, setAddedProductId] = useState<number | null>(null);
 
-  const activeProducts = products.filter(p => p.active === 1 && (!selectedCanteen || (p.canteen_id || 1) === selectedCanteen.id));
+  const activeProducts = products.filter(p => p.active === 1 && (!selectedCanteen || String(p.canteen_id || '1') === String(selectedCanteen.id)));
   const filteredProducts = activeCat === 'todos' ? activeProducts : activeProducts.filter(p => p.cat === activeCat);
 
   const points = currentUser?.points || 0;
@@ -2423,7 +2572,7 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
       </div>
       <div className="category-tabs">
         <div className={`cat-tab ${activeCat === 'todos' ? 'active' : ''}`} onClick={() => setActiveCat('todos')}>Todos</div>
-        {categories.map(cat => (
+        {categories.filter(c => String(c.canteen_id || '1') === String(selectedCanteen?.id || '1')).map(cat => (
           <div key={cat.id} className={`cat-tab ${activeCat === cat.name ? 'active' : ''}`} onClick={() => setActiveCat(cat.name)}>
             {cat.name.charAt(0).toUpperCase() + cat.name.slice(1)}
           </div>
@@ -2675,11 +2824,12 @@ function ScreenCatalogo({ goTo, addToCart, products, selectedCanteen, categories
 
 function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, isSubmitting, couponCodeState, setCouponCodeState, handleApplyCoupon, appliedCoupon, couponError, setCouponError, selectedCanteen, products }: { goBack: () => void, cart: CartItem[], changeQty: (i: number, d: number) => void, clearCart: () => void, finalizarPedido: () => void, isSubmitting: boolean, couponCodeState: string, setCouponCodeState: (s: string) => void, handleApplyCoupon: (c: string) => void, appliedCoupon: any, couponError: string, setCouponError: (e: string) => void, selectedCanteen: Canteen | null, products: Product[] }) {
   const isMaintenanceMode = selectedCanteen?.maintenance_mode === 1;
+  const [confirmClear, setConfirmClear] = useState(false);
   const total = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
   const totalPoints = cart.reduce((sum, item) => sum + (item.isReward && item.points_price ? item.points_price * item.qty : 0), 0);
   
   let discountAmount = 0;
-  const applicableTotal = appliedCoupon ? cart.filter(item => (item.canteen_id === appliedCoupon.canteen_id || (!item.canteen_id && appliedCoupon.canteen_id === 1)) && !item.isReward).reduce((sum, i) => sum + i.price * i.qty, 0) : 0;
+  const applicableTotal = appliedCoupon ? cart.filter(item => (String(item.canteen_id) === String(appliedCoupon.canteen_id) || (!item.canteen_id && String(appliedCoupon.canteen_id) === '1')) && !item.isReward).reduce((sum, i) => sum + i.price * i.qty, 0) : 0;
   const isCouponValid = appliedCoupon && applicableTotal >= (appliedCoupon.min_value || 0) && applicableTotal > 0;
   
   if (isCouponValid) {
@@ -2697,7 +2847,7 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, i
         <div className="card">
           <div>
             {cart.length === 0 ? (
-              <p style={{ color: 'var(--muted)', padding: '20px 0' }}>Seu carrinho está vazio.</p>
+              <EmptyState title="Seu carrinho está vazio" description="Que tal adicionar alguns lanches da cantina?" emoji="🛒" />
             ) : (
               cart.map((item, idx) => (
                 <div className="cart-item" key={item.name}>
@@ -2726,9 +2876,17 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, i
               ))
             )}
           </div>
-          <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap' }}>
+          <div style={{ marginTop: 16, display: 'flex', gap: 12, flexWrap: 'wrap', alignItems: 'center' }}>
             <button className="btn-secondary btn-sm" onClick={goBack}>← Voltar</button>
-            <button className="btn-danger btn-sm" onClick={() => { if(window.confirm('Tem certeza que deseja esvaziar seu carrinho?')) clearCart(); }}>🗑 Esvaziar carrinho</button>
+            {!confirmClear ? (
+              <button className="btn-danger btn-sm" onClick={() => setConfirmClear(true)}>🗑 Esvaziar carrinho</button>
+            ) : (
+              <div style={{ display: 'flex', gap: 8, alignItems: 'center', background: 'var(--danger-soft)', padding: '4px 8px', borderRadius: 8 }}>
+                <span style={{ color: 'var(--danger)', fontSize: 13, fontWeight: 'bold' }}>Tem certeza?</span>
+                <button className="btn-danger btn-sm" onClick={() => { clearCart(); setConfirmClear(false); }}>Sim</button>
+                <button className="btn-secondary btn-sm" onClick={() => setConfirmClear(false)}>Não</button>
+              </div>
+            )}
           </div>
         </div>
         <div>
@@ -2822,6 +2980,12 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, i
                 ⛔ <strong>A cantina está em manutenção.</strong><br/>Não é possível finalizar pedidos no momento.
               </div>
             )}
+
+            {!isMaintenanceMode && finalTotal > 0 && (
+              <div style={{ marginTop: 16, background: '#EFF6FF', border: '1px solid #BFDBFE', color: '#1E3A8A', padding: 12, borderRadius: 8, fontSize: 13, textAlign: 'center' }}>
+                ℹ️ <strong>Sistema em Fase de Testes</strong><br/>Os pagamentos são apenas simulados. Nenhuma cobrança real será efetuada no seu cartão.
+              </div>
+            )}
             
             <button 
               className="btn-orange btn-full" 
@@ -2838,7 +3002,7 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, i
   );
 }
 
-function ScreenConfirmacao({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCode: string }) {
+function ScreenConfirmacao({ goTo, orderCode, confirmedOrders }: { goTo: (s: Screen) => void, orderCode: string, confirmedOrders?: { code: string, canteenName: string, checkoutUrl?: string }[] }) {
   const isMultiple = orderCode.includes(',');
   return (
     <div className="page" style={{ maxWidth: 600 }}>
@@ -2846,11 +3010,33 @@ function ScreenConfirmacao({ goTo, orderCode }: { goTo: (s: Screen) => void, ord
         <div style={{ fontSize: 56, marginBottom: 16 }}>🎉</div>
         <div className="tag tag-success">{isMultiple ? 'Pedidos Confirmados!' : 'Pedido Confirmado!'}</div>
         <h2 style={{ margin: '16px 0 8px' }}>{isMultiple ? 'Seus pedidos foram enviados' : 'Seu pedido foi enviado para a cantina'}</h2>
-        <p style={{ color: 'var(--muted)', marginBottom: 28 }}>{isMultiple ? 'Apresente os códigos abaixo na hora da retirada' : 'Apresente o QR Code abaixo na hora da retirada'}</p>
-        <div className="qr-box">📱</div>
-        <div style={{ margin: '16px 0', fontSize: 22, fontWeight: 'bold', letterSpacing: 4, color: 'var(--orange)' }}>
-          {orderCode}
-        </div>
+        <p style={{ color: 'var(--muted)', marginBottom: 20 }}>{isMultiple ? 'Apresente os códigos abaixo na hora da retirada' : 'Apresente o QR Code abaixo na hora da retirada'}</p>
+        
+        {confirmedOrders && confirmedOrders.length > 0 ? (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '16px', marginBottom: '28px' }}>
+            {confirmedOrders.map((o, i) => (
+              <div key={i} style={{ padding: '16px', backgroundColor: 'var(--surface)', borderRadius: '12px', border: '1px solid var(--border)' }}>
+                <div style={{ fontSize: '14px', color: 'var(--muted)', marginBottom: '8px' }}>{o.canteenName}</div>
+                <div style={{ fontSize: 22, fontWeight: 'bold', letterSpacing: 4, color: 'var(--orange)' }}>
+                  {o.code || 'PENDENTE'}
+                </div>
+                {o.checkoutUrl && (
+                  <a href={o.checkoutUrl} target="_blank" className="btn-full" style={{ display: 'inline-block', marginTop: 12, padding: '12px', background: '#635BFF', color: '#fff', borderRadius: 8, textDecoration: 'none', fontWeight: 'bold' }}>
+                    💳 Pagar com Stripe
+                  </a>
+                )}
+              </div>
+            ))}
+          </div>
+        ) : (
+          <>
+            <div className="qr-box">📱</div>
+            <div style={{ margin: '16px 0', fontSize: 22, fontWeight: 'bold', letterSpacing: 4, color: 'var(--orange)' }}>
+              {orderCode}
+            </div>
+          </>
+        )}
+
         <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 28 }}>
           {isMultiple ? 'Guarde estes códigos — eles são únicos para os seus pedidos' : 'Guarde este código — ele é único para o seu pedido'}
         </p>
@@ -2863,7 +3049,7 @@ function ScreenConfirmacao({ goTo, orderCode }: { goTo: (s: Screen) => void, ord
 }
 
 function ScreenStatus({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCode: string }) {
-  const [status, setStatus] = useState<'aguardando' | 'preparo' | 'pronto' | 'retirado' | 'cancelado'>('aguardando');
+  const [status, setStatus] = useState<'pagamento_pendente' | 'aguardando' | 'preparo' | 'pronto' | 'retirado' | 'cancelado'>('aguardando');
   const [orderInfo, setOrderInfo] = useState<Order | null>(null);
 
   useEffect(() => {
@@ -2914,8 +3100,15 @@ function ScreenStatus({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCod
                 <div className="step-sublabel">Código QR gerado com sucesso</div>
               </div>
             </div>
-            <div className={`step ${status === 'aguardando' ? 'active' : 'done'}`}>
-              <div className="step-icon">{status === 'aguardando' ? '⏳' : '✓'}</div>
+            <div className={`step ${status === 'pagamento_pendente' ? 'active' : 'done'}`}>
+              <div className="step-icon">{status === 'pagamento_pendente' ? '💳' : '✓'}</div>
+              <div className="step-text">
+                <div className="step-label">Pagamento</div>
+                <div className="step-sublabel">{status === 'pagamento_pendente' ? 'Aguardando pagamento' : 'Pagamento confirmado'}</div>
+              </div>
+            </div>
+            <div className={`step ${status === 'aguardando' ? 'active' : (status === 'pagamento_pendente' ? '' : 'done')}`}>
+              <div className="step-icon">{status === 'aguardando' ? '⏳' : (status === 'pagamento_pendente' ? '⏳' : '✓')}</div>
               <div className="step-text">
                 <div className="step-label">Aguardando Cantina</div>
                 <div className="step-sublabel">Aguardando confirmação da cantina</div>
@@ -2952,7 +3145,7 @@ function ScreenStatus({ goTo, orderCode }: { goTo: (s: Screen) => void, orderCod
   );
 }
 
-function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCanteens }: { goTo: (s: Screen) => void, currentUser: User | null, setOrderCode: (c: string) => void, showToast: (msg: string) => void, fetchCanteens: () => void }) {
+function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCanteens, canteens }: { goTo: (s: Screen) => void, currentUser: User | null, setOrderCode: (c: string) => void, showToast: (msg: string) => void, fetchCanteens: () => void, canteens: Canteen[] }) {
   const [myOrders, setMyOrders] = useState<Order[]>([]);
   const prevMyOrdersRef = useRef<Order[]>([]);
 
@@ -3030,7 +3223,7 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
       <div className="orders-list" style={{ maxWidth: 800, margin: '0 auto' }}>
         {myOrders.length === 0 ? (
           <div className="card" style={{ textAlign: 'center', padding: 40 }}>
-            <p style={{ color: 'var(--muted)' }}>Você ainda não fez nenhum pedido.</p>
+            <EmptyState title="Nenhum pedido" description="Você ainda não fez nenhum pedido no OrderPoint." emoji="📦" />
             <button className="btn-orange" style={{ marginTop: 16 }} onClick={() => goTo('cantinas')}>Fazer meu primeiro pedido</button>
           </div>
         ) : (
@@ -3039,19 +3232,21 @@ function ScreenMeusPedidos({ goTo, currentUser, setOrderCode, showToast, fetchCa
             const itemsText = items.map(i => `${i.qty}x ${i.name}`).join(', ');
             const orderTime = formatBrazilTime(order.created_at);
             const orderDateFormatted = formatBrazilDate(order.created_at);
+            const canteenName = canteens.find(c => Number(c.id) === Number(order.canteen_id))?.name || 'Cantina';
             
             return (
               <div className="order-card" key={order.id}>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
                   <div className="order-id">
-                    Pedido {order.code} <span style={{ color: 'var(--muted)', fontSize: 12, fontWeight: 'normal', marginLeft: 8 }}>📅 {orderDateFormatted} às {orderTime}</span>
+                    {order.code ? `Pedido ${order.code}` : 'Pedido Pendente'} <span style={{ color: 'var(--muted)', fontSize: 13, fontWeight: 'normal', marginLeft: 8 }}>· {canteenName}</span>
+                    <span style={{ color: 'var(--muted)', fontSize: 12, fontWeight: 'normal', display: 'block', marginTop: 4 }}>📅 {orderDateFormatted} às {orderTime}</span>
                   </div>
                   <div className="order-meta" style={{ marginBottom: 4 }}>{itemsText}</div>
                   <div style={{ fontWeight: 600 }}>Total: R$ {order.total.toFixed(2).replace('.', ',')}</div>
                 </div>
                 <div className="order-actions-user" style={{ display: 'flex', flexWrap: 'wrap', gap: 12, alignItems: 'center' }}>
                   <span className="tag" style={getStatusColor(order.status)}>{getStatusText(order.status)}</span>
-                    {order.status !== 'retirado' && order.status !== 'cancelado' && (
+                    {order.status !== 'retirado' && order.status !== 'cancelado' && order.code && (
                       <button 
                         className="btn-secondary btn-sm" 
                         onClick={() => {
@@ -3121,11 +3316,29 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
   const [weekdayPeriod, setWeekdayPeriod] = useState<'semana' | 'mes' | 'semestre' | 'ano'>('mes');
   const [cardRevenuePeriod, setCardRevenuePeriod] = useState<'anual' | 'semestral'>('anual');
 
-  const activeOrders = orders.filter(o => o.status === 'retirado' || o.status === 'pronto');
+  const activeOrders = orders.filter(o => (o.status === 'retirado' || o.status === 'pronto') && String(o.canteen_id || '1') === String(myCanteen?.id));
   const now = new Date();
 
-  const filterByPeriod = (orderDateStr: string, period: 'dia' | 'semana' | 'mes' | 'semestre' | 'ano') => {
-    const orderDate = new Date(orderDateStr.replace(' ', 'T'));
+  const getOrderDate = (created_at: string | number) => {
+    return typeof created_at === 'number' ? new Date(created_at) : new Date(created_at.replace(' ', 'T') + (created_at.includes('Z') ? '' : 'Z'));
+  };
+
+  const getBrazilDateString = (d: Date) => {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  };
+
+  const getBrazilHour = (d: Date) => {
+    return parseInt(new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', hour: 'numeric', hour12: false }).format(d));
+  };
+
+  const getBrazilWeekday = (d: Date) => {
+    const wd = new Intl.DateTimeFormat('en-US', { timeZone: 'America/Sao_Paulo', weekday: 'short' }).format(d);
+    const map: Record<string, number> = { 'Sun': 0, 'Mon': 1, 'Tue': 2, 'Wed': 3, 'Thu': 4, 'Fri': 5, 'Sat': 6 };
+    return map[wd] ?? d.getDay();
+  };
+
+  const filterByPeriod = (orderDateStr: string | number, period: 'dia' | 'semana' | 'mes' | 'semestre' | 'ano') => {
+    const orderDate = getOrderDate(orderDateStr);
     const nowLocal = new Date();
     const diffTime = nowLocal.getTime() - orderDate.getTime();
     const diffDays = diffTime / (1000 * 60 * 60 * 24);
@@ -3137,8 +3350,8 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
     return diffDays <= 365;
   };
 
-  const todayStr = new Date().toISOString().split('T')[0];
-  const todayOrders = activeOrders.filter(o => o.created_at.startsWith(todayStr));
+  const todayStr = getBrazilDateString(now);
+  const todayOrders = activeOrders.filter(o => getBrazilDateString(getOrderDate(o.created_at)) === todayStr);
   const todayRevenue = todayOrders.reduce((acc, o) => acc + o.total, 0);
 
   const cardOrders = activeOrders.filter(o => filterByPeriod(o.created_at, cardRevenuePeriod === 'anual' ? 'ano' : 'semestre'));
@@ -3149,7 +3362,7 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
   const revenueOrders = activeOrders.filter(o => filterByPeriod(o.created_at, revenuePeriod));
 
   revenueOrders.forEach(o => {
-    const day = o.created_at.split(' ')[0];
+    const day = getBrazilDateString(getOrderDate(o.created_at));
     groupedRevenue[day] = (groupedRevenue[day] || 0) + o.total;
   });
 
@@ -3198,9 +3411,9 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
   const hourlyOrders = activeOrders.filter(o => filterByPeriod(o.created_at, hourlyPeriod));
   hourlyOrders.forEach(o => {
     // get hours in local time
-    const localDate = new Date(o.created_at.replace(' ', 'T'));
-    const hour = localDate.getHours();
-    salesByHour[hour]++;
+    const hour = getBrazilHour(getOrderDate(o.created_at));
+    // It's possible that 24 shows up if the locale is weird, check bounds
+    if (hour >= 0 && hour < 24) salesByHour[hour]++;
   });
 
   let minHour = 24;
@@ -3226,8 +3439,7 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
   const salesByWeekday = Array(7).fill(0);
   const weekdayOrders = activeOrders.filter(o => filterByPeriod(o.created_at, weekdayPeriod));
   weekdayOrders.forEach(o => {
-    const localDate = new Date(o.created_at.replace(' ', 'T'));
-    const day = localDate.getDay();
+    const day = getBrazilWeekday(getOrderDate(o.created_at));
     salesByWeekday[day] += o.total;
   });
   const daysOfWeek = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb'];
@@ -3306,7 +3518,9 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
               </LineChart>
             </ResponsiveContainer>
           ) : (
-             <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>Ops! Nenhum faturamento no período</div>
+            <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <EmptyState title="Sem Faturamento" description="Nenhum faturamento no período" emoji="📈" />
+            </div>
           )}
         </div>
 
@@ -3356,7 +3570,9 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
               </BarChart>
             </ResponsiveContainer>
           ) : (
-             <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted)' }}>Ops! Nenhum pedido no período</div>
+            <div style={{ height: 250, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
+              <EmptyState title="Sem Pedidos" description="Nenhum pedido no período" emoji="📊" />
+            </div>
           )}
         </div>
 
@@ -3438,10 +3654,24 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
 }
 
 function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, canteens, fetchCanteens, categories, fetchCategories, fetchTags }: { products: Product[], tags: Tag[], currentUser: User | null, fetchProducts: () => void, showToast: (msg: string) => void, canteens: Canteen[], fetchCanteens: () => void, categories: Category[], fetchCategories: () => void, fetchTags: () => void }) {
+  if (currentUser?.role !== 'manager' && currentUser?.role !== 'superadmin') {
+    return (
+      <div className="page">
+        <div className="card" style={{ textAlign: 'center', marginTop: 40 }}>
+          <h2>Acesso Negado</h2>
+          <p>Apenas gestores da cantina e administradores podem acessar esta área.</p>
+        </div>
+      </div>
+    );
+  }
+
   const [activeTab, setActiveTab] = useState<'dashboard' | 'pedidos' | 'gerenciar_produtos' | 'config' | 'cupons'>('dashboard');
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderFilter, setOrderFilter] = useState<string>('todos');
-  const [orderDateFilter, setOrderDateFilter] = useState<string>(new Date().toISOString().split('T')[0]);
+  const getBrazilDateString = (d: Date) => {
+    return new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(d);
+  };
+  const [orderDateFilter, setOrderDateFilter] = useState<string>(getBrazilDateString(new Date()));
   const [orderSortMethod, setOrderSortMethod] = useState<'desc' | 'asc'>('desc');
   const [orderSearchQuery, setOrderSearchQuery] = useState<string>('');
   const [productSearchQuery, setProductSearchQuery] = useState<string>('');
@@ -3450,8 +3680,8 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   const [cancelReasonInput, setCancelReasonInput] = useState('');
   
   // Settings state
-  const myCanteen = canteens.find(c => Number(c.id) === Number(currentUser?.canteen_id)) || canteens[0] || null;
-  const filteredProducts = products.filter(p => Number(p.canteen_id || 1) === Number(myCanteen?.id));
+  const myCanteen = canteens.find(c => String(c.id) === String(currentUser?.canteen_id)) || canteens[0] || null;
+  const filteredProducts = products.filter(p => String(p.canteen_id || '1') === String(myCanteen?.id));
 
   const [canteenName, setCanteenName] = useState(myCanteen?.name || '');
   const [canteenDesc, setCanteenDesc] = useState(myCanteen?.desc || '');
@@ -3573,9 +3803,10 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   };
   
   // States for the product form
-  const [editingId, setEditingId] = useState<number | null>(null);
+  const [editingId, setEditingId] = useState<string | number | null>(null);
   const [formName, setFormName] = useState('');
-  const [formCat, setFormCat] = useState(categories.length > 0 ? categories[0].name : 'salgados');
+  const myCategories = categories.filter(c => String(c.canteen_id || '1') === String(myCanteen?.id));
+  const [formCat, setFormCat] = useState(myCategories.length > 0 ? myCategories[0].name : 'salgados');
   const [formCanteenId, setFormCanteenId] = useState(canteens.length > 0 ? canteens[0].id.toString() : '1');
   const [formPrice, setFormPrice] = useState('');
   const [formPointsPrice, setFormPointsPrice] = useState('');
@@ -3595,12 +3826,12 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   const [newTagName, setNewTagName] = useState('');
   const [newTagColor, setNewTagColor] = useState('#e5e7eb');
   const [isAddingTag, setIsAddingTag] = useState(false);
-  const [deleteTagConfirmId, setDeleteTagConfirmId] = useState<number | null>(null);
+  const [deleteTagConfirmId, setDeleteTagConfirmId] = useState<string | number | null>(null);
 
   // Category management
   const [newCatName, setNewCatName] = useState('');
   const [isAddingCat, setIsAddingCat] = useState(false);
-  const [deleteCatConfirmId, setDeleteCatConfirmId] = useState<number | null>(null);
+  const [deleteCatConfirmId, setDeleteCatConfirmId] = useState<string | number | null>(null);
 
   // Coupons management
   const [coupons, setCoupons] = useState<Coupon[]>([]);
@@ -3610,8 +3841,8 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   const [formCouponDate, setFormCouponDate] = useState('');
   const [formCouponMinVal, setFormCouponMinVal] = useState('');
   const [isAddingCoupon, setIsAddingCoupon] = useState(false);
-  const [editingCouponId, setEditingCouponId] = useState<number | null>(null);
-  const [deleteCouponId, setDeleteCouponId] = useState<number | null>(null);
+  const [editingCouponId, setEditingCouponId] = useState<string | number | null>(null);
+  const [deleteCouponId, setDeleteCouponId] = useState<string | number | null>(null);
 
   const handleEditCoupon = (coupon: Coupon) => {
     setFormCouponCode(coupon.code);
@@ -3625,7 +3856,9 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
 
   const fetchCoupons = async () => {
     try {
-      const res = await fetch('/api/coupons', { headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
+      const cid = myCanteen?.id;
+      if (!cid) return;
+      const res = await fetch(`/api/coupons/canteen/${encodeURIComponent(String(cid))}`, { headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
       if (res.ok) {
         setCoupons(await res.json());
       }
@@ -3685,7 +3918,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     }
   };
 
-  const handleDeleteCoupon = async (id: number) => {
+  const handleDeleteCoupon = async (id: string | number) => {
     try {
       await fetch(`/api/coupons/${id}`, { method: 'DELETE', headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
       showToast('🗑️ Cupom excluído!');
@@ -3710,18 +3943,18 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   };
 
   useEffect(() => {
-    if (categories.length > 0 && !formCat) {
-      setFormCat(categories[0].name);
+    if (myCategories.length > 0 && !formCat) {
+      setFormCat(myCategories[0].name);
     }
-  }, [categories]);
+  }, [categories, myCanteen?.id]);
 
   const handleAddCategory = async () => {
-    if (!newCatName) return;
+    if (!newCatName || !myCanteen) return;
     try {
       const res = await fetch('/api/categories', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
-        body: JSON.stringify({ name: newCatName.toLowerCase() })
+        body: JSON.stringify({ name: newCatName.toLowerCase(), canteen_id: myCanteen.id })
       });
       if (res.ok) {
         showToast('✅ Categoria adicionada!');
@@ -3736,7 +3969,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     }
   };
 
-  const handleDeleteCategory = async (id: number) => {
+  const handleDeleteCategory = async (id: string | number) => {
     try {
       const res = await fetch(`/api/categories/${id}`, { method: 'DELETE', headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
       if (res.ok) {
@@ -3790,7 +4023,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     const payload = {
       name: formName,
       cat: formCat,
-      canteen_id: parseInt(formCanteenId, 10),
+      canteen_id: formCanteenId,
       price: parseFloat(formPrice),
       points_price: formPointsPrice ? parseInt(formPointsPrice, 10) : null,
       desc: formDesc,
@@ -3841,10 +4074,10 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     }
   };
 
-  const [deleteConfirmId, setDeleteConfirmId] = useState<number | null>(null);
-  const [deleteOrderConfirmId, setDeleteOrderConfirmId] = useState<number | null>(null);
+  const [deleteConfirmId, setDeleteConfirmId] = useState<string | number | null>(null);
+  const [deleteOrderConfirmId, setDeleteOrderConfirmId] = useState<string | number | null>(null);
 
-  const handleDelete = async (id: number) => {
+  const handleDelete = async (id: string | number) => {
     try {
       await fetch(`/api/products/${id}`, { method: 'DELETE', headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
       showToast('🗑️ Produto excluído!');
@@ -3855,7 +4088,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     }
   };
 
-  const handleDeleteOrder = async (id: number) => {
+  const handleDeleteOrder = async (id: string | number) => {
     try {
       await fetch(`/api/orders/${id}`, { method: 'DELETE', headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
       showToast('🗑️ Pedido excluído!');
@@ -3870,7 +4103,9 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
 
   const fetchOrders = async () => {
     try {
-      const res = await fetch('/api/orders', { headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
+      const cid = myCanteen?.id;
+      if (!cid) return;
+      const res = await fetch(`/api/orders/canteen/${encodeURIComponent(String(cid))}`, { headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
       if (res.ok) {
         const data = await res.json();
         
@@ -3890,16 +4125,21 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     }
   };
 
-  const updateOrderStatus = async (id: number, status: string, cancelReason?: string) => {
+  const updateOrderStatus = async (id: number | string, status: string, cancelReason?: string) => {
     try {
-      await fetch(`/api/orders/${id}/status`, {
+      const res = await fetch(`/api/orders/${id}/status`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json', 'X-User-Id': currentUser?.id?.toString() || '' },
         body: JSON.stringify({ status, cancel_reason: cancelReason })
       });
-      fetchOrders();
-      if (status === 'cancelado') {
-        fetchProducts();
+      if (res.ok) {
+        fetchOrders();
+        if (status === 'cancelado') {
+          fetchProducts();
+        }
+        showToast(`Status atualizado para ${status}`);
+      } else {
+        showToast('Erro ao atualizar status do pedido.');
       }
     } catch (err) {
       showToast('Erro ao atualizar status.');
@@ -3922,13 +4162,13 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
         <p>Gerencie pedidos e produtos da sua cantina</p>
       </div>
 
-      <div className="gestor-tabs">
+      <ScrollableRow className="gestor-tabs" style={{ '--gradient-bg': 'var(--bg)' } as React.CSSProperties}>
         <button className={`gestor-tab ${activeTab === 'dashboard' ? 'active' : ''}`} onClick={() => setActiveTab('dashboard')}>📈 Dashboard</button>
         <button className={`gestor-tab ${activeTab === 'pedidos' ? 'active' : ''}`} onClick={() => setActiveTab('pedidos')}>📋 Pedidos</button>
         <button className={`gestor-tab ${activeTab === 'gerenciar_produtos' ? 'active' : ''}`} onClick={() => { setActiveTab('gerenciar_produtos'); setIsProductFormVisible(false); }}>🥘 Gerenciar Produtos</button>
         <button className={`gestor-tab ${activeTab === 'cupons' ? 'active' : ''}`} onClick={() => setActiveTab('cupons')}>🎟️ Cupons</button>
         <button className={`gestor-tab ${activeTab === 'config' ? 'active' : ''}`} onClick={() => setActiveTab('config')}>⚙️ Configurações</button>
-      </div>
+      </ScrollableRow>
 
       {activeTab === 'dashboard' && (
         <DashboardView orders={orders} myCanteen={myCanteen} />
@@ -4148,9 +4388,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
             ))}
             
             {coupons.length === 0 && !isAddingCoupon && (
-              <div style={{ textAlign: 'center', padding: 40, background: 'var(--surface)', borderRadius: 16 }}>
-                <p style={{ color: 'var(--muted)' }}>Nenhum cupom criado.</p>
-              </div>
+              <EmptyState title="Nenhum cupom cadastrado" description="Crie cupons de desconto para sua cantina." emoji="🎟️" />
             )}
           </div>
         </div>
@@ -4184,7 +4422,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                Ordenação: {orderSortMethod === 'desc' ? 'Recentes ↓' : 'Antigos ↑'}
             </button>
           </div>
-          <div className="gestor-tabs" style={{ marginBottom: 16 }}>
+          <ScrollableRow className="gestor-tabs" style={{ marginBottom: 16, '--gradient-bg': 'var(--bg)' } as React.CSSProperties}>
             <button className={`gestor-tab ${orderFilter === 'todos' ? 'active' : ''}`} onClick={() => setOrderFilter('todos')}>Todos (Ativos)</button>
             <button className={`gestor-tab ${orderFilter === 'aguardando' ? 'active' : ''}`} onClick={() => setOrderFilter('aguardando')}>Aguardando</button>
             <button className={`gestor-tab ${orderFilter === 'preparo' ? 'active' : ''}`} onClick={() => setOrderFilter('preparo')}>Em Preparo</button>
@@ -4192,7 +4430,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
             <button className={`gestor-tab ${orderFilter === 'retirado' ? 'active' : ''}`} onClick={() => setOrderFilter('retirado')}>Retirado</button>
             <button className={`gestor-tab ${orderFilter === 'cancelado' ? 'active' : ''}`} onClick={() => setOrderFilter('cancelado')}>Cancelados</button>
             <button className={`gestor-tab ${orderFilter === 'historico' ? 'active' : ''}`} onClick={() => setOrderFilter('historico')}>Histórico</button>
-          </div>
+          </ScrollableRow>
           {orderFilter === 'historico' && (
             <div style={{ padding: 12, borderRadius: 8, background: 'var(--bg-secondary)', marginBottom: 16, border: '1px solid var(--line)' }}>
               <p style={{ fontSize: 13, color: 'var(--muted)', marginBottom: 8 }}>
@@ -4203,19 +4441,21 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
           )}
           <div className="orders-list">
             {orders.length === 0 ? (
-              <p style={{ color: 'var(--muted)' }}>Nenhum pedido no momento.</p>
+              <EmptyState title="Nenhum pedido" description="Não há pedidos no momento para esta visualização." emoji="📋" />
             ) : (
               orders
-                .filter(o => Number(o.canteen_id || 1) === Number(myCanteen?.id))
+                .filter(o => String(o.canteen_id || '1') === String(myCanteen?.id))
                 .filter(o => {
                   if (!orderSearchQuery) return true;
                   const q = orderSearchQuery.toLowerCase();
-                  return o.code.toLowerCase().includes(q) || o.user_name.toLowerCase().includes(q);
+                  const codeStr = o.code || '';
+                  return codeStr.toLowerCase().includes(q) || o.user_name.toLowerCase().includes(q);
                 })
                 .filter(o => {
                   if (!orderDateFilter) return true;
-                  const orderDate = o.created_at.split(' ')[0];
-                  return orderDate === orderDateFilter;
+                  const orderDateObj = typeof o.created_at === 'number' ? new Date(o.created_at) : new Date(o.created_at.replace(' ', 'T') + (o.created_at.includes('Z') ? '' : 'Z'));
+                  const orderDateFormatted = new Intl.DateTimeFormat('en-CA', { timeZone: 'America/Sao_Paulo', year: 'numeric', month: '2-digit', day: '2-digit' }).format(orderDateObj);
+                  return orderDateFormatted === orderDateFilter;
                 })
                 .filter(o => {
                   if (orderFilter === 'todos') {
@@ -4227,8 +4467,8 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                   return o.status === orderFilter;
                 })
                 .sort((a, b) => {
-                  const tA = new Date(a.created_at.replace(' ', 'T') + 'Z').getTime();
-                  const tB = new Date(b.created_at.replace(' ', 'T') + 'Z').getTime();
+                  const tA = typeof a.created_at === 'number' ? a.created_at : new Date(a.created_at.replace(' ', 'T') + (a.created_at.includes('Z') ? '' : 'Z')).getTime();
+                  const tB = typeof b.created_at === 'number' ? b.created_at : new Date(b.created_at.replace(' ', 'T') + (b.created_at.includes('Z') ? '' : 'Z')).getTime();
                   return orderSortMethod === 'desc' ? tB - tA : tA - tB;
                 })
                 .map(order => {
@@ -4241,7 +4481,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
                     <div className="order-card" key={order.id}>
                       <div>
                         <div className="order-id">
-                          Pedido {order.code} <span style={{ color: 'var(--muted)', fontSize: 12, fontWeight: 'normal', marginLeft: 8 }}>📅 {orderDateFormatted} às {orderTime}</span>
+                          {order.code ? `Pedido ${order.code}` : 'Pedido Pendente'} <span style={{ color: 'var(--muted)', fontSize: 12, fontWeight: 'normal', marginLeft: 8 }}>📅 {orderDateFormatted} às {orderTime}</span>
                         </div>
                         <div className="order-meta">{order.user_name} · {itemsText} · R$ {order.total.toFixed(2).replace('.', ',')}</div>
                       </div>
@@ -4328,7 +4568,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
               </div>
             ))}
             {filteredProducts.length === 0 && (
-              <p style={{ color: 'var(--muted)' }}>Nenhum produto cadastrado.</p>
+              <EmptyState title="Nenhum produto" description="Sua cantina ainda não tem produtos ou não encontramos o termo buscado." emoji="🍔" />
             )}
           </div>
         </div>
@@ -4423,7 +4663,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
               <div style={{ display: 'grid', gap: '6px', fontWeight: 'bold', fontSize: '14px' }}>
                 Categorias do Produto
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8, fontWeight: 'normal' }}>
-                  {categories.map(cat => (
+                  {categories.filter(c => String(c.canteen_id || '1') === String(myCanteen?.id)).map(cat => (
                     <div 
                       key={cat.id} 
                       onClick={() => setFormCat(cat.name)}
@@ -4480,7 +4720,7 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
               <div style={{ display: 'grid', gap: '6px', fontWeight: 'bold', fontSize: '14px' }}>
                 Tags do Produto
                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 8, fontWeight: 'normal' }}>
-                  {tags.filter(t => t.canteen_id === myCanteen?.id).map(tag => (
+                  {tags.filter(t => String(t.canteen_id) === String(myCanteen?.id)).map(tag => (
                     <div 
                       key={tag.id} 
                       onClick={() => {
