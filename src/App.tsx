@@ -198,18 +198,10 @@ const playNotificationSound = () => {
   }
 };
 
-function ScreenPontos({ goTo, products, canteens, currentUser, setCurrentUser, showToast, addToCart, cart }: { goTo: (s: Screen) => void, products: Product[], canteens: Canteen[], currentUser: User | null, setCurrentUser: (u: User) => void, showToast: (msg: string) => void, addToCart: (p: Product) => void, cart: CartItem[] }) {
+function ScreenPontos({ goTo, currentUser, setCurrentUser, showToast }: { goTo: (s: Screen) => void, currentUser: User | null, setCurrentUser: (u: User) => void, showToast: (msg: string) => void }) {
   const points = currentUser?.points || 0;
-  const currentRewardPointsInCart = cart.reduce((sum, item) => sum + (item.isReward && item.points_price ? item.points_price * item.qty : 0), 0);
-  const redeemableProducts = products.filter(p => p.points_price && p.points_price > 0 && p.active === 1);
-
-  // Group by Canteen
-  const groupedProducts: Record<number, Product[]> = {};
-  redeemableProducts.forEach(p => {
-    const cid = p.canteen_id || 1;
-    if (!groupedProducts[cid]) groupedProducts[cid] = [];
-    groupedProducts[cid].push(p);
-  });
+  const [pointHistory, setPointHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
 
   useEffect(() => {
     if (currentUser?.id) {
@@ -221,19 +213,16 @@ function ScreenPontos({ goTo, products, canteens, currentUser, setCurrentUser, s
           }
         })
         .catch(() => {});
+
+      fetch(`/api/users/${currentUser.id}/points-history`, { headers: { 'X-User-Id': currentUser.id.toString() } })
+        .then(res => res.json())
+        .then(data => {
+          setPointHistory(data);
+          setLoadingHistory(false);
+        })
+        .catch(() => setLoadingHistory(false));
     }
   }, [currentUser?.id, setCurrentUser]);
-
-  const handleRedeem = (product: Product) => {
-    if (!currentUser?.id) return;
-    if (points - currentRewardPointsInCart < (product.points_price || 0)) {
-      showToast('⚠️ Pontos insuficientes para adicionar mais este item!');
-      return;
-    }
-    
-    addToCart({ ...product, price: 0, isReward: true, points_price: product.points_price });
-    showToast(`✅ ${product.name} adicionado ao carrinho usando pontos!`);
-  };
 
   return (
     <div className="page" style={{ maxWidth: 800 }}>
@@ -248,52 +237,44 @@ function ScreenPontos({ goTo, products, canteens, currentUser, setCurrentUser, s
         <div style={{ marginTop: 24, fontSize: 14, opacity: 0.8 }}>
           Ganhe 1 ponto a cada R$ 1,00 gasto na cantina. Os pontos são adicionados após a retirada do pedido.
         </div>
+        <div style={{ marginTop: 8, fontSize: 13, opacity: 0.7, fontStyle: 'italic' }}>
+          *Atenção: Algumas cantinas podem não participar do programa de pontos.
+        </div>
       </div>
 
-      <h2 style={{ marginBottom: 16 }}>Recompensas Disponíveis</h2>
-      {redeemableProducts.length === 0 ? (
-        <EmptyState title="Nenhuma recompensa" description="Nenhum produto disponível para resgate no momento." emoji="🎁" />
-      ) : (
-        <div>
-          {Object.entries(groupedProducts).map(([canteenIdStr, canteenProducts]) => {
-            const canteen = canteens.find(c => c.id === parseInt(canteenIdStr));
-            if (!canteen) return null;
-
-            return (
-              <div key={canteen.id} style={{ marginBottom: 32 }}>
-                <h3 style={{ marginBottom: 12, display: 'flex', alignItems: 'center', gap: 8, color: 'var(--text)' }}>
-                  <span>{canteen.emoji}</span> {canteen.name}
-                </h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(min(100%, 250px), 1fr))', gap: 16 }}>
-                  {canteenProducts.map(product => {
-                    const isAffordable = (points - currentRewardPointsInCart) >= (product.points_price || 0);
-                    return (
-                      <div key={product.id} className="product-card" style={{ opacity: product.stock <= 0 ? 0.6 : 1 }}>
-                        <LazyMedia className="product-emoji" emoji={product.emoji} imageUrl={product.image_url} alt={product.name} />
-                        <div className="product-info">
-                          <div className="product-name">{product.name}</div>
-                          <div className="product-desc">{product.desc}</div>
-                          <div className="product-footer" style={{ marginTop: 'auto', display: 'flex', flexDirection: 'column', alignItems: 'stretch', gap: 12 }}>
-                            <div className="product-price" style={{ color: 'var(--orange)' }}>{product.points_price} PTS</div>
-                            <button 
-                              className={isAffordable ? "btn-outline btn-sm" : "btn-secondary btn-sm"} 
-                              style={{ width: '100%', opacity: !isAffordable || product.stock <= 0 ? 0.5 : 1 }} 
-                              onClick={() => handleRedeem(product)}
-                              disabled={product.stock <= 0}
-                            >
-                              {product.stock <= 0 ? 'Esgotado' : (isAffordable ? 'Resgatar' : 'Pontos Insuficientes')}
-                            </button>
-                          </div>
-                        </div>
-                      </div>
-                    );
-                  })}
+      <div className="card">
+        <h2 style={{ marginBottom: 16, display: 'flex', alignItems: 'center', gap: 8 }}>
+          <span>📋</span> Histórico de Pontos
+        </h2>
+        
+        {loadingHistory ? (
+          <div style={{ textAlign: 'center', padding: 24, color: 'var(--muted)' }}>Carregando histórico...</div>
+        ) : pointHistory.length === 0 ? (
+          <EmptyState title="Nenhum histórico" description="Você ainda não ganhou ou gastou pontos." emoji="📝" />
+        ) : (
+          <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            {pointHistory.map((log) => (
+              <div key={log.id} style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: 16, background: 'var(--bg-color)', borderRadius: 8, border: '1px solid var(--border-color)' }}>
+                <div>
+                  <div style={{ fontWeight: 600, color: 'var(--text)' }}>
+                    {log.description}
+                  </div>
+                  <div style={{ fontSize: 13, color: 'var(--muted)', marginTop: 4 }}>
+                    {new Date(log.created_at).toLocaleString('pt-BR')}
+                  </div>
+                </div>
+                <div style={{ 
+                  fontWeight: 600, 
+                  fontSize: 16,
+                  color: log.type === 'earned' ? 'var(--success)' : 'var(--danger)'
+                }}>
+                  {log.type === 'earned' ? '+' : '-'}{log.amount} PTS
                 </div>
               </div>
-            );
-          })}
-        </div>
-      )}
+            ))}
+          </div>
+        )}
+      </div>
     </div>
   );
 }
@@ -993,7 +974,7 @@ export default function App() {
           {currentScreen === 'gestor' && <ScreenGestor products={products} tags={tags} fetchTags={fetchTags} currentUser={currentUser} fetchProducts={fetchProducts} showToast={showToast} canteens={canteens} fetchCanteens={fetchCanteens} categories={categories} fetchCategories={fetchCategories} />}
           {currentScreen === 'superadmin' && <ScreenSuperadmin goTo={goTo} currentUser={currentUser} showToast={showToast} fetchCanteens={fetchCanteens} globalSettings={globalSettings} fetchGlobalSettings={fetchGlobalSettings} />}
           {currentScreen === 'perfil' && <ScreenPerfil goTo={goTo} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} />}
-          {currentScreen === 'pontos' && <ScreenPontos goTo={goTo} products={products} canteens={canteens} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} addToCart={addToCart} cart={cart} />}
+          {currentScreen === 'pontos' && <ScreenPontos goTo={goTo} currentUser={currentUser} setCurrentUser={setCurrentUser} showToast={showToast} />}
         </motion.div>
       </AnimatePresence>
 
@@ -2218,6 +2199,7 @@ function ScreenCadastro({ goTo }: { goTo: (s: Screen) => void }) {
             <>
               <div className="alert alert-info" style={{ marginBottom: 16 }}>
                 Enviamos um código de 6 dígitos para <strong>{email}</strong>.
+                <div style={{ marginTop: 8, fontSize: 13, opacity: 0.9 }}>Se não encontrar na caixa de entrada, verifique também a sua caixa de <strong>Spam</strong> ou Lixo Eletrônico.</div>
               </div>
               {devMsg && (
                 <div className="alert alert-warning" style={{ marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
@@ -2377,6 +2359,7 @@ function ScreenEsqueciSenha({ goTo }: { goTo: (s: Screen) => void }) {
             <>
               <div className="alert alert-info" style={{ marginBottom: 16 }}>
                 Enviamos um código de 6 dígitos para <strong>{email}</strong>.
+                <div style={{ marginTop: 8, fontSize: 13, opacity: 0.9 }}>Se não encontrar na caixa de entrada, verifique também a sua caixa de <strong>Spam</strong> ou Lixo Eletrônico.</div>
               </div>
               {devMsg && (
                 <div className="alert alert-warning" style={{ marginBottom: 16, background: '#fffbeb', border: '1px solid #fde68a', color: '#92400e' }}>
@@ -2836,6 +2819,7 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, i
     discountAmount = applicableTotal * (appliedCoupon.discount_pct / 100);
   }
   const finalTotal = Math.max(0, total - discountAmount);
+  const pointsEarned = selectedCanteen?.points_enabled !== 0 ? Math.floor(finalTotal) : 0;
 
   return (
     <div className="page">
@@ -2978,6 +2962,12 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, i
             {isMaintenanceMode && (
               <div style={{ marginTop: 16, background: '#fffbeb', border: '1px solid #fcd34d', color: '#b45309', padding: 12, borderRadius: 8, fontSize: 13, textAlign: 'center' }}>
                 ⛔ <strong>A cantina está em manutenção.</strong><br/>Não é possível finalizar pedidos no momento.
+              </div>
+            )}
+
+            {pointsEarned > 0 && !isMaintenanceMode && (
+              <div style={{ marginTop: 16, background: 'var(--card)', border: '1px solid var(--orange)', color: 'var(--orange)', padding: 12, borderRadius: 8, fontSize: 13, textAlign: 'center', fontWeight: 'bold' }}>
+                ⭐️ Você ganhará +{pointsEarned} pontos com esta compra!
               </div>
             )}
 
