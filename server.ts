@@ -9,7 +9,7 @@ import crypto from "crypto";
 import swaggerUi from "swagger-ui-express";
 import fs from "fs";
 import path from "path";
-import nodemailer from "nodemailer";
+import sgMail from "@sendgrid/mail";
 import Stripe from "stripe";
 let stripeClient: Stripe | null = null;
 function getStripe(): Stripe {
@@ -103,34 +103,35 @@ async function startServer() {
 
   const hashPassword = (password: string) => crypto.createHash('sha256').update(password).digest('hex');
 
-  const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST || 'smtp.office365.com',
-    port: parseInt(process.env.SMTP_PORT || '587', 10),
-    secure: process.env.SMTP_PORT === '465', // true for 465, false for other ports
-    auth: {
-      user: process.env.SMTP_USER,
-      pass: process.env.SMTP_PASS,
-    },
-  });
+  if (process.env.SENDGRID_API_KEY) {
+    sgMail.setApiKey(process.env.SENDGRID_API_KEY);
+  }
 
   const sendEmail = async (to: string, subject: string, text: string, html?: string) => {
-    if (!process.env.SMTP_USER || !process.env.SMTP_PASS) {
-      console.warn("⚠️ SMTP credentials not set! Simulating email...");
+    if (!process.env.SENDGRID_API_KEY || !process.env.SENDGRID_FROM_EMAIL) {
+      console.warn("⚠️ SendGrid credentials not set! Simulating email...");
       console.log(`[EMAIL SIMULATION] To: ${to} | Subject: ${subject} | Msg: ${text}`);
       return;
     }
     try {
-      await transporter.sendMail({
-        from: `"Cantina OrderPoint" <${process.env.SMTP_USER}>`,
+      const msg = {
         to,
+        from: {
+          email: process.env.SENDGRID_FROM_EMAIL,
+          name: "Cantina OrderPoint"
+        },
         subject,
         text,
         html: html || text,
-      });
+      };
+      await sgMail.send(msg);
       console.log(`📧 Email sent to ${to}`);
-    } catch (err) {
+    } catch (err: any) {
       console.error("Erro ao enviar e-mail:", err);
-      throw new Error("Erro ao enviar e-mail. Verifique a configuração SMTP.");
+      if (err.response) {
+        console.error(err.response.body);
+      }
+      throw new Error(`Erro ao enviar e-mail SendGrid: ${err.message}`);
     }
   };
 
@@ -349,11 +350,35 @@ async function startServer() {
         if (!p.points_price || p.active !== 1 || p.stock <= 0) throw new Error("Produto não disponível.");
         if (u.points < p.points_price) throw new Error("Pontos insuficientes.");
         t.update(userRef, { points: u.points - p.points_price });
+        
+        const logRef = doc(collection(db, "point_logs"));
+        t.set(logRef, {
+          user_id: userId,
+          type: 'spent',
+          amount: p.points_price,
+          description: `Resgate: ${p.name}`,
+          created_at: Date.now()
+        });
+
         return { pData: p, newPoints: u.points - p.points_price };
       });
       res.json({ success: true, newPoints: result.newPoints, product: { id: productId, ...result.pData, price: 0, isReward: true, points_price: result.pData.points_price } });
     } catch (err: any) {
       res.status(400).json({ error: err.message });
+    }
+  });
+
+  app.get("/api/users/:id/points-history", async (req, res) => {
+    try {
+      const q = query(
+        collection(db, "point_logs"),
+        where("user_id", "==", req.params.id)
+      );
+      const snaps = await getDocs(q);
+      const logs = snaps.docs.map(parseDoc).sort((a: any, b: any) => b.created_at - a.created_at);
+      res.json(logs);
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
     }
   });
 
@@ -742,15 +767,31 @@ async function startServer() {
         if (orderSnap.exists()) {
           const order = orderSnap.data();
           if (!order.points_awarded || order.points_awarded <= 0) {
-            const pointsToAward = Math.floor(Number(order.total) || 0);
-            updateData.points_awarded = pointsToAward;
-            
-            if (order.user_id && pointsToAward > 0) {
-              const userRef = doc(db, "users", String(order.user_id));
-              const uSnap = await getDoc(userRef);
-              if (uSnap.exists()) {
-                const u = uSnap.data();
-                await updateDoc(userRef, { points: (Number(u.points) || 0) + pointsToAward });
+            let participates = true;
+            if (order.canteen_id) {
+              const cSnap = await getDoc(doc(db, "canteens", String(order.canteen_id)));
+              if (cSnap.exists() && cSnap.data().points_enabled === 0) {
+                participates = false;
+              }
+            }
+            if (participates) {
+              const pointsToAward = Math.floor(Number(order.total) || 0);
+              updateData.points_awarded = pointsToAward;
+              
+              if (order.user_id && pointsToAward > 0) {
+                const userRef = doc(db, "users", String(order.user_id));
+                const uSnap = await getDoc(userRef);
+                if (uSnap.exists()) {
+                  const u = uSnap.data();
+                  await updateDoc(userRef, { points: (Number(u.points) || 0) + pointsToAward });
+                  await addDoc(collection(db, "point_logs"), {
+                    user_id: String(order.user_id),
+                    type: 'earned',
+                    amount: pointsToAward,
+                    description: `Compra finalizada (Pedido #${order.code || req.params.id.slice(-4)})`,
+                    created_at: Date.now()
+                  });
+                }
               }
             }
           }
@@ -803,3 +844,4 @@ async function startServer() {
 }
 
 startServer();
+
