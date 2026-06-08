@@ -1,5 +1,6 @@
 import express, { Request, Response } from "express";
 import "express-async-errors";
+import { GoogleGenAI, Type } from "@google/genai";
 import { initializeApp } from 'firebase/app';
 import { getFirestore, collection, doc, getDoc, getDocs, setDoc, updateDoc, deleteDoc, query, where, addDoc, orderBy, runTransaction, writeBatch, initializeFirestore } from 'firebase/firestore';
 const parseDoc = (doc: any) => ({ id: doc.id, ...doc.data() });
@@ -811,6 +812,134 @@ async function startServer() {
     res.json({ success: true });
   });
 
+  app.post("/api/report", async (req, res) => {
+    try {
+      if (!process.env.GEMINI_API_KEY) {
+        return res.status(500).json({ error: "Chave da API Gemini não configurada." });
+      }
+
+      const { orders, canteen, products } = req.body;
+
+      const ai = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
+
+      const simplifiedProducts = (products || []).map((p: any) => ({ name: p.name, price: p.price, stock: p.stock })).slice(0, 100);
+      const ordersToProcess = (orders || []).filter((o: any) => o.status === 'retirado' || o.status === 'pronto');
+      const simplifiedOrders = ordersToProcess.map((o: any) => ({ total: o.total, date: o.created_at, items: Array.isArray(o.items) ? o.items.map((i:any) => i.name) : (typeof o.items === 'string' ? (() => { try { return JSON.parse(o.items).map((i:any) => i.name); } catch(e) { return [] } })() : []) })).slice(0, 200);
+      
+      const faturamentoTotal = ordersToProcess.reduce((sum: number, o: any) => sum + (o.total || 0), 0);
+
+      const response = await ai.models.generateContent({
+        model: "gemini-2.5-flash",
+        contents: `SYSTEM INSTRUCTION: Você é um analista de dados automatizado da OrderPoint, focado em gestão de cantinas.
+Crie um relatório EXTREMAMENTE SIMPLES, direto ao ponto e baseado EXCLUSIVAMENTE nos dados fornecidos (em markdown).
+Use formatação de bullet points curtos, valores numéricos exatos enviados na prompt, e sem textos longos. 
+
+MUITO IMPORTANTE:
+1. NÃO INVENTE NENHUM PRODUTO. Apenas cite produtos explicitamente listados na seção "Produtos".
+2. NÃO INVENTE PEDIDOS OU VALORES. O Faturamento Atual EXATO já foi calculado e enviado na prompt em "Faturamento Real Calculado".
+3. NÃO CITE MARGEM DE LUCRO. Foque apenas em Faturamento.
+
+Inclua as seguintes seções nesta ordem exata:
+- **Faturamento Atual**: Exiba o valor exato fornecido em "Faturamento Real Calculado".
+- **Faturamento Estimado (Futuro)**: Com base na média diária dos pedidos enviados, estime o provável faturamento dos próximos 7 e 30 dias. Não mencione "lucro estimado".
+- **Rotatividade de Produtos**: 
+  - MAIS VENDIDOS: Verifique quais produtos mais aparecem nos "Pedidos Recentes" (cite até 3 nomes reais).
+  - ESTAGNADOS: Compare a lista de "Produtos" com os "Pedidos Recentes" e liste os que não tiveram vendas.
+- **Relatório de Estoque**: Com base no campo 'stock' de "Produtos", alerte quais itens estão em níveis críticos e precisam de reposição, e calcule o ritmo da redução semanal com base nas vendas.
+- **Recomendações**: Dicas diretas sobre qual estoque comprar e como vender os estagnados.
+
+Cantina: ${canteen?.name || 'Desconhecida'}
+Faturamento Real Calculado: R$ ${faturamentoTotal.toFixed(2)}
+Produtos: ${JSON.stringify(simplifiedProducts)}
+Pedidos Recentes: ${JSON.stringify(simplifiedOrders)}`
+      });
+
+      res.json({ report: response.text });
+    } catch (err: any) {
+      console.error("Gemini API Error:", err);
+      res.status(500).json({ error: "Erro ao gerar o relatório." });
+    }
+  });
+
+  app.post("/api/chat", async (req, res) => {
+    try {
+      if (!process.env.GEMINI_API_KEY) {
+        return res.status(500).json({ error: "Chave da API Gemini não configurada." });
+      }
+
+      const { message, context } = req.body;
+      
+      const ai = new GoogleGenAI({
+        apiKey: process.env.GEMINI_API_KEY,
+        httpOptions: { headers: { 'User-Agent': 'aistudio-build' } }
+      });
+      
+      let response;
+      try {
+        response = await ai.models.generateContent({
+          model: "gemini-2.5-flash",
+          contents: `SYSTEM INSTRUCTION: Você é o Bot Assistente da OrderPoint, um sistema de cantinas virtuais.
+          Responda as perguntas de forma amigável, mas extremamente curta, direta e objetiva (no máximo 1 ou 2 frases curtas por resposta).
+          Nunca repita longas listas de produtos ou faça textos explicativos longos. Seja muito sucinto para otimizar a conversa.
+          MUITO IMPORTANTE: Apenas informe sobre o contexto da cantina e seu sistema (produtos, ingredientes, cantinas, carrinho, valores, cupons, pontos, produtos resgatáveis, etc.).
+          Você é estritamente proibido de responder sobre assuntos de fora (esportes, política, clima, matemática complexa, curiosidades gerais, criação de código de computador, etc). Se a resposta não tiver a ver com a OrderPoint/Cantina, responda de forma ultra curta que você ajuda apenas nas cantinas.
+          Evite formatar markdown pesado. Use emojis se quiser.
+          Para ajudar o usuário de maneira inteligente, você pode sugerir ações como ADD_TO_CART, REMOVE_FROM_CART ou APPLY_COUPON. 
+          - Se o usuário falar sobre adicionar algo ao carrinho, verifique se a cantina correspondente a este produto está aberta (status === 'active' e active === 1). Se estiver fechada/em manutenção, NÃO adicione ao carrinho e responda de forma legal e amigável que infelizmente a cantina está fechada no momento.
+          - Se a cantina estiver aberta, verifique também se há disponibilidade (stock > 0). Se o produto não for encontrado (ex: "oxinha"), avise amigavelmente que não encontrou o produto.
+          - Se o usuário quiser comprar/resgatar o produto USANDO PONTOS, adicione a ação ADD_TO_CART com a propriedade use_points: true (mas verifique se ele possui os pontos_price necessários no saldo total dele de points).
+          - Se pedir para remover algo do carrinho, confira o product_id no cart do contexto e adicione a ação REMOVE_FROM_CART usando o product_id (e se for um item resgatado com pontos, defina também use_points: true na ação). 
+          - Se o usuário pedir para aplicar um cupom de desconto, pegue o código do cupom mencionado pelo usuário (em letras maiúsculas) e adicione a ação APPLY_COUPON with a propriedade coupon_code.
+          Se você realizar alguma dessas ações, avise na 'message' de forma bem rápida e direta que a ação foi realizada!
+          
+          CONTEXTO DO SISTEMA E USUÁRIO atual: ${JSON.stringify(context, null, 2)}
+          
+          MENSAGEM DO USUÁRIO: ${message}`,
+          config: {
+            responseMimeType: "application/json",
+            responseSchema: {
+              type: Type.OBJECT,
+              properties: {
+                message: { type: Type.STRING },
+                actions: {
+                  type: Type.ARRAY,
+                  items: {
+                    type: Type.OBJECT,
+                    properties: {
+                      type: { type: Type.STRING, description: "Action type, ex: ADD_TO_CART, REMOVE_FROM_CART ou APPLY_COUPON" },
+                      product_id: { type: Type.STRING },
+                      coupon_code: { type: Type.STRING },
+                      use_points: { type: Type.BOOLEAN }
+                    }
+                  }
+                }
+              },
+              required: ["message"]
+            }
+          }
+        });
+      } catch (err: any) {
+        if (err.status === 429 || err.message?.includes('429') || err.message?.includes('RESOURCE_EXHAUSTED')) {
+          return res.status(429).json({ error: "No momento, o limite de uso do assistente foi atingido. Por favor, aguarde cerca de 1 minuto e tente novamente." });
+        }
+        if (err.status === 503 || err.message?.includes('503') || err.message?.includes('UNAVAILABLE')) {
+          return res.status(503).json({ error: "O modelo de IA está com alta demanda ou indisponível no momento. Por favor, tente novamente em alguns instantes." });
+        }
+        console.error("Gemini API Error:", err);
+        return res.status(500).json({ error: "Ocorreu um erro interno ao processar sua mensagem." });
+      }
+      
+      const responseText = response.text || "{}";
+      res.json(JSON.parse(responseText));
+    } catch (error: any) {
+      console.error("GenAI Error:", error);
+      res.status(500).json({ error: "Houve um problema ao processar pelo Assistente.", details: error.message });
+    }
+  });
+
   app.use((err: any, req: Request, res: Response, next: express.NextFunction) => {
     console.error("API Error:", err);
     res.status(500).json({ error: err.message || "Internal Server Error" });
@@ -844,4 +973,3 @@ async function startServer() {
 }
 
 startServer();
-
