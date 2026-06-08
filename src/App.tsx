@@ -5,6 +5,8 @@ import EmojiPicker from 'emoji-picker-react';
 import { LineChart, Line, BarChart, Bar, PieChart, Pie, Cell, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, ResponsiveContainer } from 'recharts';
 import Cropper from 'react-easy-crop';
 import { getCroppedImg } from './cropUtils';
+import Markdown from 'react-markdown';
+import ChatWidget from './components/ChatWidget';
 
 function LazyMedia({ imageUrl, emoji, alt, className, style, onClick, onMouseEnter, onMouseLeave, title }: { imageUrl?: string, emoji?: string, alt?: string, className?: string, style?: React.CSSProperties, onClick?: () => void, onMouseEnter?: (e: React.MouseEvent) => void, onMouseLeave?: (e: React.MouseEvent) => void, title?: string }) {
   const [loaded, setLoaded] = useState(false);
@@ -543,6 +545,8 @@ export default function App() {
     }
   }, [currentUser?.id]);
 
+  const [allCoupons, setAllCoupons] = useState<Coupon[]>([]);
+
   const fetchGlobalSettings = async () => {
     try {
       const res = await fetch('/api/settings', { cache: 'no-store' });
@@ -587,12 +591,25 @@ export default function App() {
     }
   };
 
+  const fetchAllCoupons = async () => {
+    try {
+      const res = await fetch('/api/coupons', { headers: { 'X-User-Id': currentUser?.id?.toString() || '' } });
+      if (res.ok) {
+        const data = await res.json();
+        setAllCoupons(data);
+      }
+    } catch (err) {
+      console.error("Erro ao carregar cupons", err);
+    }
+  };
+
   useEffect(() => {
     fetchProducts();
     fetchCanteens();
     fetchCategories();
     fetchTags();
     fetchGlobalSettings();
+    fetchAllCoupons();
     
     // Polling para manter o catálogo e estoque atualizados em tempo real
     const interval = setInterval(() => {
@@ -600,6 +617,7 @@ export default function App() {
       fetchCanteens();
       fetchTags();
       fetchGlobalSettings();
+      fetchAllCoupons();
     }, 5000);
     
     return () => clearInterval(interval);
@@ -654,6 +672,14 @@ export default function App() {
       return [...prev, { id: product.id, name: product.name, price: product.price, emoji: product.emoji, qty: 1, canteen_id: product.canteen_id, isReward: product.isReward, points_price: product.points_price }];
     });
     showToast(`✅ ${product.name} adicionado!`);
+  };
+
+  const handleRemoveFromCart = (productId: string, use_points?: boolean) => {
+    const item = cart.find(i => i.id.toString() === productId.toString() && !!i.isReward === !!use_points);
+    if (item) {
+      updateCart(prev => prev.filter(i => !(i.id.toString() === productId.toString() && !!i.isReward === !!use_points)));
+      showToast(`❌ ${item.name} removido!`);
+    }
   };
 
   const changeQty = (index: number, delta: number) => {
@@ -1092,6 +1118,19 @@ export default function App() {
       </AnimatePresence>
 
       <ToastNotifier />
+
+      {(currentUser && currentUser.role === 'student' && currentScreen !== 'login' && currentScreen !== 'cadastro' && currentScreen !== 'esqueci-senha' && currentScreen !== 'login-gestor') && (
+        <ChatWidget 
+          products={products} 
+          canteens={canteens} 
+          cart={cart} 
+          points={currentUser?.points || 0} 
+          coupons={allCoupons.filter(c => c.active === 1)}
+          handleAddToCart={addToCart} 
+          handleRemoveFromCart={handleRemoveFromCart}
+          handleApplyCoupon={handleApplyCoupon}
+        />
+      )}
     </>
   );
 }
@@ -2834,7 +2873,7 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, i
               <EmptyState title="Seu carrinho está vazio" description="Que tal adicionar alguns lanches da cantina?" emoji="🛒" />
             ) : (
               cart.map((item, idx) => (
-                <div className="cart-item" key={item.name}>
+                <div className="cart-item" key={`${idx}-${item.name}`}>
                   <div className="cart-emoji" style={{ overflow: 'hidden', width: 40, height: 40, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
                     <LazyMedia emoji={item.emoji} imageUrl={(products.find(p => p.name === item.name) || {}).image_url} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
                   </div>
@@ -2877,8 +2916,8 @@ function ScreenCarrinho({ goBack, cart, changeQty, clearCart, finalizarPedido, i
           <div className="card order-summary">
             <h3>Resumo do Pedido</h3>
             <div>
-              {cart.map(item => (
-                <div className="summary-line" key={item.name}>
+              {cart.map((item, idx) => (
+                <div className="summary-line" key={`${idx}-${item.name}`}>
                   <span>{item.name} × {item.qty}</span>
                   <span>{item.price === 0 ? (item.points_price ? `${item.points_price * item.qty} PTS` : 'Grátis') : `R$ ${(item.price * item.qty).toFixed(2).replace('.', ',')}`}</span>
                 </div>
@@ -3499,10 +3538,10 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
           </div>
           {lineChartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={250}>
-              <LineChart data={lineChartData}>
+              <LineChart data={lineChartData} margin={{ left: 10, right: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
                 <XAxis dataKey="date" tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
-                <YAxis tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} tickFormatter={(val) => `R$ ${val}`} />
+                <YAxis width={60} tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} tickFormatter={(val) => `R$ ${val}`} />
                 <RechartsTooltip contentStyle={{ background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--text)' }} formatter={(value: number) => [`R$ ${value}`, 'Faturamento']} cursor={{ fill: 'rgba(255,255,255,0.1)' }} />
                 <Line type="monotone" dataKey="receita" stroke="var(--orange)" strokeWidth={3} dot={{r: 4, strokeWidth: 2}} activeDot={{r: 6}} />
               </LineChart>
@@ -3525,10 +3564,10 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
           </div>
           {barChartData.length > 0 ? (
             <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={barChartData} layout="vertical" margin={{ left: 40, right: 20 }}>
+              <BarChart data={barChartData} layout="vertical" margin={{ left: 80, right: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e5e7eb" />
                 <XAxis type="number" tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
-                <YAxis type="category" dataKey="name" width={100} tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
+                <YAxis type="category" dataKey="name" width={120} tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
                 <RechartsTooltip contentStyle={{ background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--text)' }} formatter={(value: number) => [`${value} unidades`, 'Vendas']} cursor={{ fill: 'rgba(255,255,255,0.1)' }} />
                 <Bar dataKey="quantidade" fill="var(--primary)" radius={[0, 4, 4, 0]} barSize={24} />
               </BarChart>
@@ -3577,10 +3616,10 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
           </div>
           {barChartDataBottom.length > 0 ? (
             <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={barChartDataBottom} layout="vertical" margin={{ left: 40, right: 20 }}>
+              <BarChart data={barChartDataBottom} layout="vertical" margin={{ left: 80, right: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="#e5e7eb" />
                 <XAxis type="number" tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
-                <YAxis type="category" dataKey="name" width={100} tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
+                <YAxis type="category" dataKey="name" width={120} tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
                 <RechartsTooltip contentStyle={{ background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--text)' }} formatter={(value: number) => [`${value} unidades`, 'Vendas']} cursor={{ fill: 'rgba(255,255,255,0.1)' }} />
                 <Bar dataKey="quantidade" fill="#ef4444" radius={[0, 4, 4, 0]} barSize={24} />
               </BarChart>
@@ -3604,10 +3643,10 @@ function DashboardView({ orders, myCanteen }: { orders: Order[], myCanteen: Cant
           </div>
           {weekdayChartData.some(d => d.receita > 0) ? (
             <ResponsiveContainer width="100%" height={250}>
-              <BarChart data={weekdayChartData}>
+              <BarChart data={weekdayChartData} margin={{ left: 10, right: 20 }}>
                 <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#e5e7eb" />
                 <XAxis dataKey="name" tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} />
-                <YAxis tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} tickFormatter={(val) => `R$ ${val}`} />
+                <YAxis width={60} tick={{fontSize: 12, fill: 'var(--text)'}} tickLine={false} axisLine={false} tickFormatter={(val) => `R$ ${val}`} />
                 <RechartsTooltip contentStyle={{ background: 'var(--card)', borderColor: 'var(--line)', color: 'var(--text)' }} formatter={(value: number) => [`R$ ${value}`, 'Faturamento']} cursor={{ fill: 'rgba(255,255,255,0.1)' }} />
                 <Bar dataKey="receita" fill="var(--success)" radius={[4, 4, 0, 0]} />
               </BarChart>
@@ -3655,7 +3694,61 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
     );
   }
 
-  const [activeTab, setActiveTab] = useState<'dashboard' | 'pedidos' | 'gerenciar_produtos' | 'config' | 'cupons'>('dashboard');
+  const [activeTab, setActiveTab] = useState<'dashboard' | 'pedidos' | 'gerenciar_produtos' | 'config' | 'cupons' | 'relatorio'>('dashboard');
+
+  const myCanteen = canteens.find(c => String(c.id) === String(currentUser?.canteen_id)) || canteens[0] || null;
+
+  const [reportData, setReportData] = useState<string | null>(null);
+  const [isGeneratingReport, setIsGeneratingReport] = useState(false);
+
+  useEffect(() => {
+    if (myCanteen) {
+      const saved = localStorage.getItem(`canteen_saved_report_${myCanteen.id}`);
+      if (saved) setReportData(saved);
+      else setReportData(null);
+    }
+  }, [myCanteen]);
+
+  const generateReport = async () => {
+    if (!myCanteen) return;
+    setIsGeneratingReport(true);
+    try {
+      const res = await fetch('/api/report', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          orders: orders,
+          canteen: myCanteen,
+          products: products.filter(p => p.canteen_id === myCanteen.id)
+        })
+      });
+      if (res.ok) {
+        const data = await res.json();
+        setReportData(data.report);
+        localStorage.setItem(`canteen_saved_report_${myCanteen.id}`, data.report);
+      } else {
+        showToast("❌ Erro ao gerar relatório");
+      }
+    } catch (e) {
+      showToast("❌ Erro ao gerar relatório");
+    } finally {
+      setIsGeneratingReport(false);
+    }
+  };
+
+  const handleDownloadReport = () => {
+    if (!reportData) return;
+    const blob = new Blob([reportData], { type: 'text/markdown' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `relatorio-cantina-${new Date().toISOString().split('T')[0]}.md`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
   const [orders, setOrders] = useState<Order[]>([]);
   const [orderFilter, setOrderFilter] = useState<string>('todos');
   const getBrazilDateString = (d: Date) => {
@@ -3670,7 +3763,6 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
   const [cancelReasonInput, setCancelReasonInput] = useState('');
   
   // Settings state
-  const myCanteen = canteens.find(c => String(c.id) === String(currentUser?.canteen_id)) || canteens[0] || null;
   const filteredProducts = products.filter(p => String(p.canteen_id || '1') === String(myCanteen?.id));
 
   const [canteenName, setCanteenName] = useState(myCanteen?.name || '');
@@ -4157,11 +4249,47 @@ function ScreenGestor({ products, tags, currentUser, fetchProducts, showToast, c
         <button className={`gestor-tab ${activeTab === 'pedidos' ? 'active' : ''}`} onClick={() => setActiveTab('pedidos')}>📋 Pedidos</button>
         <button className={`gestor-tab ${activeTab === 'gerenciar_produtos' ? 'active' : ''}`} onClick={() => { setActiveTab('gerenciar_produtos'); setIsProductFormVisible(false); }}>🥘 Gerenciar Produtos</button>
         <button className={`gestor-tab ${activeTab === 'cupons' ? 'active' : ''}`} onClick={() => setActiveTab('cupons')}>🎟️ Cupons</button>
+        <button className={`gestor-tab ${activeTab === 'relatorio' ? 'active' : ''}`} onClick={() => setActiveTab('relatorio')}>📑 Relatório IA</button>
         <button className={`gestor-tab ${activeTab === 'config' ? 'active' : ''}`} onClick={() => setActiveTab('config')}>⚙️ Configurações</button>
       </ScrollableRow>
 
       {activeTab === 'dashboard' && (
         <DashboardView orders={orders} myCanteen={myCanteen} />
+      )}
+
+      {activeTab === 'relatorio' && (
+        <div className="gestor-panel active" style={{ animation: 'fadeIn 0.3s ease-in-out' }}>
+          <div className="card" style={{ padding: '24px', display: 'flex', flexDirection: 'column', gap: '16px' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: '16px' }}>
+              <div>
+                <h2 style={{ margin: 0, fontSize: '1.25rem' }}>Relatório Inteligente</h2>
+                <p style={{ margin: 0, color: 'var(--muted)', fontSize: '0.9rem' }}>Deixe nossa IA analisar os dados da sua cantina e gerar um resumo executivo.</p>
+              </div>
+              <div style={{ display: 'flex', gap: '8px', alignItems: 'center' }}>
+                {reportData && (
+                  <button onClick={handleDownloadReport} className="btn-secondary" style={{ padding: '8px 12px', display: 'flex', alignItems: 'center', justifyContent: 'center' }} title="Baixar Relatório">
+                    ⬇️
+                  </button>
+                )}
+                <button onClick={generateReport} disabled={isGeneratingReport} className="btn-primary" style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                  {isGeneratingReport ? '⏳ Gerando Relatório...' : '✨ Gerar Relatório'}
+                </button>
+              </div>
+            </div>
+            {reportData && (
+              <div className="card markdown-body" style={{ marginTop: '16px', background: 'var(--bg)', padding: '24px', fontSize: '14px', lineHeight: '1.6' }}>
+                <Markdown>{reportData}</Markdown>
+              </div>
+            )}
+            {!reportData && !isGeneratingReport && (
+              <div style={{ textAlign: 'center', padding: '40px', color: 'var(--muted)', background: 'var(--bg)', borderRadius: '12px', marginTop: '16px' }}>
+                <p style={{ fontSize: '2rem', margin: '0 0 16px 0' }}>🤖</p>
+                <p style={{ fontWeight: 500, margin: 0 }}>Nenhum relatório gerado ainda.</p>
+                <p style={{ fontSize: '0.9rem', marginTop: '4px' }}>Clique no botão acima para iniciar a análise.</p>
+              </div>
+            )}
+          </div>
+        </div>
       )}
 
       {activeTab === 'config' && (
