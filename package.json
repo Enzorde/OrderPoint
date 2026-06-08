@@ -12,7 +12,7 @@
     "lint": "tsc --noEmit"
   },
   "dependencies": {
-    "@google/genai": "^1.29.0",
+    "@google/genai": "^1.52.0",
     "@sendgrid/mail": "^8.1.6",
     "@stripe/stripe-js": "^9.5.0",
     "@tailwindcss/vite": "^4.1.14",
@@ -30,6 +30,7 @@
     "react": "^19.0.0",
     "react-dom": "^19.0.0",
     "react-easy-crop": "^5.5.7",
+    "react-markdown": "^10.1.0",
     "react-router-dom": "^7.15.0",
     "recharts": "^3.8.1",
     "stripe": "^22.1.1",
