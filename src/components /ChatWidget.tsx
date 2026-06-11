@@ -119,14 +119,18 @@ export default function ChatWidget({ products, canteens, cart, points, coupons, 
       
       if (data.actions && Array.isArray(data.actions)) {
         for (const action of data.actions) {
+          const qty = action.quantity && typeof action.quantity === 'number' && action.quantity > 0 ? action.quantity : 1;
           if (action.type === 'ADD_TO_CART' && action.product_id) {
             const product = products.find(p => p.id === action.product_id || p.id === Number(action.product_id));
             if (product && product.stock > 0) {
-              if (action.use_points && product.points_price) {
-                // To buy with points, add isReward flag
-                handleAddToCart({ ...product, isReward: true, price: 0 });
-              } else {
-                handleAddToCart(product);
+              const itemsToAdd = Math.min(qty, product.stock);
+              for (let i = 0; i < itemsToAdd; i++) {
+                if (action.use_points && product.points_price) {
+                  // To buy with points, add isReward flag
+                  handleAddToCart({ ...product, isReward: true, price: 0 });
+                } else {
+                  handleAddToCart(product);
+                }
               }
             }
           } else if (action.type === 'APPLY_COUPON' && action.coupon_code) {
@@ -135,7 +139,9 @@ export default function ChatWidget({ products, canteens, cart, points, coupons, 
             }
           } else if (action.type === 'REMOVE_FROM_CART' && action.product_id) {
             if (handleRemoveFromCart) {
-              handleRemoveFromCart(action.product_id, action.use_points);
+              for (let i = 0; i < qty; i++) {
+                handleRemoveFromCart(action.product_id, action.use_points);
+              }
             }
           }
         }
