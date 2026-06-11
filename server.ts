@@ -891,9 +891,10 @@ Pedidos Recentes: ${JSON.stringify(simplifiedOrders)}`
           - Se o usuário falar sobre adicionar algo ao carrinho, verifique se a cantina correspondente a este produto está aberta (status === 'active' e active === 1). Se estiver fechada/em manutenção, NÃO adicione ao carrinho e responda de forma legal e amigável que infelizmente a cantina está fechada no momento.
           - Se a cantina estiver aberta, verifique também se há disponibilidade (stock > 0). Se o produto não for encontrado (ex: "oxinha"), avise amigavelmente que não encontrou o produto.
           - Se o usuário quiser comprar/resgatar o produto USANDO PONTOS, adicione a ação ADD_TO_CART com a propriedade use_points: true (mas verifique se ele possui os pontos_price necessários no saldo total dele de points).
-          - Se pedir para remover algo do carrinho, confira o product_id no cart do contexto e adicione a ação REMOVE_FROM_CART usando o product_id (e se for um item resgatado com pontos, defina também use_points: true na ação). 
+          - Se pedir para remover algo do carrinho, confira o product_id no cart do contexto e adicione a ação REMOVE_FROM_CART usando o product_id (e se for um item resgatado com pontos, defina também use_points: true na ação). Além disso passe a quantidade (quantity) a ser removida (se especificada).
           - Se o usuário pedir para aplicar um cupom de desconto, pegue o código do cupom mencionado pelo usuário (em letras maiúsculas) e adicione a ação APPLY_COUPON with a propriedade coupon_code.
           Se você realizar alguma dessas ações, avise na 'message' de forma bem rápida e direta que a ação foi realizada!
+          Atente-se à propriedade 'quantity': Ao adicionar ou remover um item, sempre envie a quantidade desejada pelo usuário no campo 'quantity' (o padrão é 1). Se o usuário pedir "duas mini pizzas", envie quantity = 2.
           
           CONTEXTO DO SISTEMA E USUÁRIO atual: ${JSON.stringify(context, null, 2)}
           
@@ -912,7 +913,8 @@ Pedidos Recentes: ${JSON.stringify(simplifiedOrders)}`
                       type: { type: Type.STRING, description: "Action type, ex: ADD_TO_CART, REMOVE_FROM_CART ou APPLY_COUPON" },
                       product_id: { type: Type.STRING },
                       coupon_code: { type: Type.STRING },
-                      use_points: { type: Type.BOOLEAN }
+                      use_points: { type: Type.BOOLEAN },
+                      quantity: { type: Type.INTEGER, description: "Quantidade do item a ser adicionado ou removido" }
                     }
                   }
                 }
